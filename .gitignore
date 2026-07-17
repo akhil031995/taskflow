@@ -1,0 +1,25 @@
+# --- Secrets / environment ---
+.env
+.env.local
+*.local
+
+# --- Database backups produced by the 1-Click Backup feature ---
+*.sql
+!src/migrations/*.sql          # keep versioned migrations tracked
+taskflow_backup_*.json
+
+# --- Dependencies (should any be added later) ---
+/vendor/
+/node_modules/
+composer.lock
+
+# --- Editor / OS cruft ---
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log

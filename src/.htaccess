@@ -1,0 +1,7 @@
+# Default document + basic hardening for the TaskFlow app.
+DirectoryIndex index.php
+
+# Don't expose the raw SQL schema or dotfiles over HTTP.
+<FilesMatch "\.(sql|md)$">
+    Require all denied
+</FilesMatch>
