@@ -172,6 +172,20 @@ git init && git add . && git status   # confirm .env is NOT listed
 `.env` and backup dumps are git-ignored; versioned migrations under
 `src/migrations/` are kept.
 
+### Releases (build only on tag)
+
+CI (`.github/workflows/publish.yml`) builds and pushes the Docker image to
+GHCR **only when a version tag is pushed** - regular branch commits never
+trigger a build. Cut a release by tagging:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+This publishes `ghcr.io/akhil031995/taskflow` tagged `1.0.0`, `1.0`, and `1`.
+The workflow can also be run manually from the Actions tab (`workflow_dispatch`).
+
 ## License
 
 Personal / self-hosted use. No warranty.
