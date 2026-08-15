@@ -105,6 +105,55 @@ require __DIR__ . '/includes/header.php';
             class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs leading-relaxed"><?= e($val('org_standards_baseline')) ?></textarea>
     </section>
 
+    <!-- Model routing -->
+    <section class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 mb-5">
+        <h2 class="font-semibold mb-1 flex items-center gap-2">🧭 Model Routing</h2>
+        <p class="text-xs text-slate-500 mb-4">
+            run-agent.sh picks a model per ticket before launching Claude, so small/low-priority
+            tickets can run on a cheaper model while the top model is reserved for complex work.
+            A task-type override (if it matches) wins over the priority mapping; the default model
+            is the fallback when neither matches.
+        </p>
+
+        <div class="flex items-center justify-between mb-4">
+            <span class="text-sm font-medium">Enabled</span>
+            <select data-setting="model_routing_enabled" class="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent dark:bg-slate-900 text-xs">
+                <option value="1" <?= $val('model_routing_enabled', '1') === '1' ? 'selected' : '' ?>>Enabled</option>
+                <option value="0" <?= $val('model_routing_enabled', '1') === '0' ? 'selected' : '' ?>>Disabled (always use the Claude CLI's default model)</option>
+            </select>
+        </div>
+
+        <div class="grid sm:grid-cols-2 gap-4 mb-4">
+            <label class="text-sm">
+                <span class="text-slate-500 dark:text-slate-400">Priority 1 (High) model</span>
+                <input data-setting="model_routing_priority_1" type="text" placeholder="claude-opus-5" value="<?= e($val('model_routing_priority_1', 'claude-opus-5')) ?>"
+                    class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
+            </label>
+            <label class="text-sm">
+                <span class="text-slate-500 dark:text-slate-400">Priority 2 (Medium) model</span>
+                <input data-setting="model_routing_priority_2" type="text" placeholder="claude-sonnet-5" value="<?= e($val('model_routing_priority_2', 'claude-sonnet-5')) ?>"
+                    class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
+            </label>
+            <label class="text-sm">
+                <span class="text-slate-500 dark:text-slate-400">Priority 3 (Low) model</span>
+                <input data-setting="model_routing_priority_3" type="text" placeholder="claude-haiku-4-5-20251001" value="<?= e($val('model_routing_priority_3', 'claude-haiku-4-5-20251001')) ?>"
+                    class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
+            </label>
+            <label class="text-sm">
+                <span class="text-slate-500 dark:text-slate-400">Default / fallback model</span>
+                <input data-setting="model_routing_default_model" type="text" placeholder="claude-sonnet-5" value="<?= e($val('model_routing_default_model', 'claude-sonnet-5')) ?>"
+                    class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
+            </label>
+        </div>
+
+        <label class="text-sm block">
+            <span class="text-slate-500 dark:text-slate-400">Task-type overrides (JSON, optional)</span>
+            <textarea data-setting="model_routing_task_type_overrides" rows="3" placeholder='{"sub-task": "claude-haiku-4-5-20251001"}'
+                class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs leading-relaxed"><?= e($val('model_routing_task_type_overrides')) ?></textarea>
+            <span class="text-[11px] text-slate-500">Keys are <code>feature</code> / <code>bug</code> / <code>tech-debt</code> / <code>sub-task</code>. Takes precedence over the priority mapping above.</span>
+        </label>
+    </section>
+
     <!-- Notifications -->
     <section class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 mb-5">
         <h2 class="font-semibold mb-1 flex items-center gap-2">🔔 Notifications</h2>
