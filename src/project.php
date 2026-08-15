@@ -88,6 +88,7 @@ require __DIR__ . '/includes/header.php';
         <button data-view="notes" class="view-tab px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500">Notes</button>
         <button data-view="standards" class="view-tab px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500">Standards</button>
         <button data-view="dod" class="view-tab px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500">DoD Gates</button>
+        <button data-view="primer" class="view-tab px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500">Primer</button>
     </div>
     <div id="board-view-toggle" class="flex items-center gap-3 pb-2 text-xs text-slate-500 dark:text-slate-400">
         <label class="flex items-center gap-2 cursor-pointer select-none">
@@ -212,6 +213,23 @@ require __DIR__ . '/includes/header.php';
         </p>
         <textarea id="dod-criteria" rows="5" placeholder=""
             class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs leading-relaxed"></textarea>
+    </div>
+</section>
+
+<!-- ===================== PRIMER (cached project structure summary) ===================== -->
+<section id="view-primer" class="hidden max-w-3xl">
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5">
+        <div class="flex items-center justify-between mb-1">
+            <h2 class="font-semibold">🧭 Project Primer</h2>
+            <span id="primer-updated" class="text-xs text-slate-400"></span>
+        </div>
+        <p class="text-xs text-slate-500 mb-3">
+            Auto-generated summary of this project's structure, detected stack, and key files. Regenerated only
+            when the file tree changes and written into <code>CLAUDE.md</code> the next time a ticket for this
+            project is claimed, so a headless agent run doesn't have to re-derive project shape from scratch.
+            Read-only &mdash; edit the underlying code to change it, not this page.
+        </p>
+        <pre id="primer-content" class="text-xs whitespace-pre-wrap font-mono bg-slate-50 dark:bg-slate-800/60 rounded-lg p-3 text-slate-600 dark:text-slate-300">(no primer generated yet — runs the next time a ticket is claimed for this project)</pre>
     </div>
 </section>
 

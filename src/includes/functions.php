@@ -517,6 +517,24 @@ function effective_acceptance_criteria(int $projectId): string
     return $override !== '' ? $override : ACCEPTANCE_CRITERIA_TEMPLATE;
 }
 
+// ===================================================================
+// Cached per-project context primer (structure/entry points/key files).
+// Generated + refreshed by mcp-server/project-primer.js at ticket-claim
+// time (see finalizeClaim in db.js) and written into the project's
+// CLAUDE.md; read-only here, purely for display on the project page.
+// ===================================================================
+
+/** A project's cached primer, or null if none has been generated yet. */
+function get_project_primer(int $projectId): ?array
+{
+    $stmt = db()->prepare(
+        'SELECT primer_md, fingerprint, updated_at FROM project_primers WHERE project_id = ?'
+    );
+    $stmt->execute([$projectId]);
+    $row = $stmt->fetch();
+    return $row === false ? null : $row;
+}
+
 /**
  * Recent MCP invocations for the logs screen (created_at rendered in IST).
  * $runId filters to one run-agent.sh execution: a numeric `runs.id`, the

@@ -134,7 +134,7 @@ function isIgnored(name, gitignoreMatchers) {
   return gitignoreMatchers.some((m) => m(name));
 }
 
-function walk(root) {
+export function walk(root) {
   const gitignoreMatchers = loadGitignoreMatchers(root);
   const files = [];
   const stack = [root];

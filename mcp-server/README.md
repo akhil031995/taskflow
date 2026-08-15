@@ -108,3 +108,10 @@ Source: `repomap-index.js` (pure indexing/search logic, no MCP dependency) and
   layer lives in `project_standards.override_md` (edited from the app's
   Standards tab, or seeded by `bootstrap-standards.js`) and is merged with the
   org baseline into that file at ticket-claim time - see `standards.js`.
+- `project-primer.js` generates a cached, size-bounded per-project primer
+  (top-level layout, detected stack, key files by symbol density) from the
+  same walk/tagger `repomap-index.js` uses. Cached in `project_primers`,
+  keyed by a fingerprint of the file tree so it's only regenerated when that
+  tree actually changes; written into the same `CLAUDE.md` as a second
+  managed block alongside standards (see `finalizeClaim` in `db.js`) and
+  shown read-only on the project page's Primer tab.
