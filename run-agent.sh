@@ -4,8 +4,20 @@
 #
 # This script IS the scheduler: it runs one headless Claude session immediately,
 # then repeats every INTERVAL (default 30 min). After a rate limit it backs off
-# longer (default 90 min) before the next attempt. A single-instance lock
-# (flock, auto-released on exit) stops two loops from running at once.
+# longer (default 90 min) before the next attempt.
+#
+# Per-project locking: multiple instances of this script (started separately -
+# e.g. a few `nohup ./run-agent.sh &` in a row, or a few systemd services) may
+# now run at once. Each instance still claims tickets in global priority order
+# (claim-ticket.js), but before doing any work on a claimed ticket it takes a
+# non-blocking `flock` on that ticket's PROJECT (see the "Per-project locking"
+# section below) - so two instances can make progress on two different
+# projects in parallel, while still guaranteeing no two ever touch the same
+# project's working directory at once. If the lock is already held (a sibling
+# instance is mid-session on that project), the ticket is handed straight back
+# to the queue (requeue-ticket.js) and this instance retries shortly after,
+# rather than blocking or racing a `git checkout` in a repo someone else is
+# using.
 #
 # Each run first claims a ticket ITSELF, from this shell (mcp-server/
 # claim-ticket.js / claim-ticket-by-id.js - the same atomic claim the MCP tool
@@ -49,6 +61,13 @@
 #   # or a systemd service, or inside tmux/screen
 #   # stop it with: Ctrl-C  (or kill the process)
 #
+# For parallel throughput across projects, start several instances the same
+# way (separate `nohup ... &` lines, or several systemd service units) - they
+# share the same $LOCK_DIR (env TASKFLOW_LOCK_DIR, default
+# /tmp/taskflow-agent-locks) and self-serialize per project automatically; no
+# extra flags needed. Running N instances just means up to N projects can be
+# worked at once, never two instances in the same project_folder.
+#
 # One-time host setup:
 #   npm install -g @anthropic-ai/claude-code
 #   claude login
@@ -63,9 +82,10 @@ export TZ="${TZ:-Asia/Kolkata}"
 PROJECT_DIR="${TASKFLOW_DIR:-/home/akhil/development/taskflow}"
 PROMPT_FILE="$PROJECT_DIR/AGENT_PROMPT.md"
 LOG_DIR="${TASKFLOW_LOG_DIR:-/tmp/taskflow-agent-logs}"
-LOCK_FILE="${TASKFLOW_LOCK:-/tmp/taskflow_ai.lock}"
+LOCK_DIR="${TASKFLOW_LOCK_DIR:-/tmp/taskflow-agent-locks}"  # one flock file per project_id
 INTERVAL="${TASKFLOW_INTERVAL:-1800}"                # 30 min between runs
 RATE_LIMIT_BACKOFF="${TASKFLOW_RATE_BACKOFF:-5400}"  # 90 min after a rate limit
+SKIP_RETRY="${TASKFLOW_SKIP_RETRY:-60}"              # short retry after a busy-project skip
 
 print_usage() {
     cat <<'EOF'
@@ -151,14 +171,7 @@ if [ "$TICKET_MODE" -eq 1 ]; then
     ONCE=1   # a forced single-ticket run is a one-off action, not a loop.
 fi
 
-# --- Single-instance lock (fd held for the loop's lifetime) ----------------
-# flock releases automatically when the process exits, so there is no stale
-# lock to clean up even after a crash or kill.
-exec 9>"$LOCK_FILE" || { echo "[run-agent] cannot open lock $LOCK_FILE"; exit 1; }
-if ! flock -n 9; then
-    echo "[run-agent] another run-agent loop is already running. Exiting."
-    exit 0
-fi
+mkdir -p "$LOCK_DIR" || { echo "[run-agent] cannot create lock dir $LOCK_DIR"; exit 1; }
 
 # Clean shutdown on Ctrl-C / termination (interrupts sleep too).
 trap 'echo "[run-agent] stopping."; exit 0' INT TERM
@@ -286,10 +299,38 @@ $conflicts" \
     fi
 }
 
+# --- Per-project locking (lets different projects run in parallel) ---------
+#
+# One flock file per project_id, held only for as long as THIS instance is
+# actively working that project (from just after claiming a ticket for it
+# through checkpointing/merge) - not for the whole loop's sleep interval, so a
+# sibling instance can pick that project up again the moment this one is done
+# with it. flock auto-releases on process exit too, so a killed/crashed
+# instance never leaves a stale lock behind.
+#
+# Bash's `exec {fd}>file` form picks a free descriptor and stores its number
+# in $fd, so each call gets its own descriptor - required here since a lock
+# must stay held across several helper calls within one run_once() call.
+project_lock_acquire() {
+    local project_id="$1" lock_file="$LOCK_DIR/project-${project_id}.lock"
+    exec {PROJECT_LOCK_FD}>"$lock_file" || return 1
+    flock -n "$PROJECT_LOCK_FD"
+}
+
+project_lock_release() {
+    [ -n "${PROJECT_LOCK_FD:-}" ] || return 0
+    flock -u "$PROJECT_LOCK_FD" 2>/dev/null
+    exec {PROJECT_LOCK_FD}>&- 2>/dev/null
+    unset PROJECT_LOCK_FD
+}
+
 # --- One headless run; prints status and returns Claude's exit code --------
-#   0  = success / nothing to do
-#   75 = rate-limited (triggers the longer backoff)
-#   *  = other failure
+#   0   = success / nothing to do
+#   2   = skipped - claimed ticket's project is locked by another instance
+#         (ticket was requeued; caller should retry soon, not wait a full
+#         interval)
+#   75  = rate-limited (triggers the longer backoff)
+#   *   = other failure
 run_once() {
     cd "$PROJECT_DIR" || { echo "[run-agent] cannot cd to $PROJECT_DIR"; return 1; }
     mkdir -p "$LOG_DIR"
@@ -331,10 +372,11 @@ run_once() {
         fi
     fi
 
-    local task_id project_id project_folder
+    local task_id project_id project_folder resumed
     task_id="$(echo "$ticket_json" | jq -r '.id')"
     project_id="$(echo "$ticket_json" | jq -r '.project_id // empty')"
     project_folder="$(echo "$ticket_json" | jq -r '.project_folder // empty')"
+    resumed="$(echo "$ticket_json" | jq -r 'if .resumed then "1" else "0" end')"
     echo "[run-agent] claimed TF-$task_id -> project_folder: ${project_folder:-'(not set)'}" | tee -a "$run_log"
 
     if [ -z "$project_folder" ] || [ ! -d "$project_folder" ]; then
@@ -343,6 +385,24 @@ run_once() {
             "project_folder ('${project_folder:-null}') is not set or does not exist on this host; run-agent.sh could not establish a working directory." \
             2>&1 | tee -a "$run_log"
         return 1
+    fi
+
+    # Per-project lock: if another instance is already mid-session on this
+    # project, hand the ticket straight back to the queue instead of racing a
+    # git checkout in a working directory someone else is using.
+    if [ -z "$project_id" ]; then
+        echo "[run-agent] claimed ticket has no project_id; cannot take a per-project lock. Marking blocked." | tee -a "$run_log"
+        node "$PROJECT_DIR/mcp-server/block-ticket.js" "$task_id" \
+            "Claimed ticket has no project_id; run-agent.sh cannot establish a per-project lock." \
+            2>&1 | tee -a "$run_log"
+        return 1
+    fi
+    if ! project_lock_acquire "$project_id"; then
+        echo "[run-agent] project $project_id is locked by another run-agent instance; requeuing TF-$task_id." | tee -a "$run_log"
+        node "$PROJECT_DIR/mcp-server/requeue-ticket.js" "$task_id" "$resumed" \
+            "Project $project_id locked by a concurrent run-agent.sh instance; requeued for retry." \
+            2>&1 | tee -a "$run_log"
+        return 2
     fi
 
     # Ensure project_folder is a git repo and check out this ticket's scratch
@@ -426,6 +486,11 @@ $ticket_json"
     node "$PROJECT_DIR/mcp-server/record-run.js" "${run_id:--}" "$task_id" "${project_id:--}" "$run_log" "$code" "$started_at" \
         2>&1 | tee -a "$run_log"
 
+    # Release the project lock now (not at loop end) so a sibling instance can
+    # pick this project's next ticket back up immediately, instead of waiting
+    # out this loop's sleep interval.
+    project_lock_release
+
     echo "[run-agent] $(date '+%Y-%m-%d %H:%M:%S %Z') finished with code $code"
     return $code
 }
@@ -444,6 +509,8 @@ while true; do
 
     if [ "$code" -eq 75 ]; then
         wait_s="$RATE_LIMIT_BACKOFF"
+    elif [ "$code" -eq 2 ]; then
+        wait_s="$SKIP_RETRY"   # claimed ticket's project was busy; retry soon
     else
         wait_s="$INTERVAL"
     fi

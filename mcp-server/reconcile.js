@@ -2,14 +2,20 @@
 /**
  * Reconcile orphaned AI sessions.
  *
- * run-agent.sh is single-instance (flock) and runs sessions sequentially, so
- * any ticket still `in-progress` when this runs BETWEEN sessions died without
- * reporting its status - almost always because the CLI hit the token/rate
- * limit and was killed before it could call update_ticket_status.
+ * run-agent.sh instances now hold only a per-project lock (see run-agent.sh's
+ * "Per-project locking" section), not a single global one, so several
+ * instances can legitimately have tickets `in-progress` at once - one per
+ * locked project. A ticket found `in-progress` here is only truly orphaned if
+ * NO run-agent instance currently holds its project's lock; if the lock is
+ * held, a live session is still working it and must not be touched. Such
+ * orphans die without reporting status - almost always because the CLI hit
+ * the token/rate limit and was killed before it could call
+ * update_ticket_status.
  *
- * Such tickets are moved to `rate-limited-paused` (they stay in the In Progress
- * column) so the next run RESUMES them (get_highest_priority_ticket resumes
- * paused tickets first, and the agent continues from the prior `git diff`).
+ * Orphaned tickets are moved to `rate-limited-paused` (they stay in the In
+ * Progress column) so the next run RESUMES them (get_highest_priority_ticket
+ * resumes paused tickets first, and the agent continues from the prior
+ * `git diff`).
  *
  * Each reconciliation increments the ticket's `resume_attempts` counter
  * (reset to 0 on the next fresh, non-resumed claim - see finalizeClaim in
@@ -20,19 +26,44 @@
  * Configure the threshold with the RESUME_ATTEMPT_LIMIT env var (default 3).
  *
  * Run standalone:  node mcp-server/reconcile.js
- * run-agent.sh calls this at the start of every iteration.
+ * run-agent.sh calls this at the start of every iteration, before it holds
+ * any lock itself - so at that point, any project lock found held belongs to
+ * a genuinely concurrent sibling instance, never to this run.
  */
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { pool, sessionLog, markTicketBlocked } from './db.js';
 import { notifyTicketEvent } from './notify.js';
 
 const RESUME_ATTEMPT_LIMIT = Number(process.env.RESUME_ATTEMPT_LIMIT) || 3;
+const LOCK_DIR = process.env.TASKFLOW_LOCK_DIR || '/tmp/taskflow-agent-locks';
+
+/** True if another live process currently holds project_id's per-project lock. */
+function isProjectLocked(projectId) {
+  const lockFile = path.join(LOCK_DIR, `project-${projectId}.lock`);
+  if (!fs.existsSync(lockFile)) return false; // never locked yet on this host
+  try {
+    // Acquire-and-immediately-release: succeeds (exit 0) iff no one else
+    // holds it right now. `-n` fails fast instead of blocking.
+    execFileSync('flock', ['-n', lockFile, '-c', 'true'], { stdio: 'ignore' });
+    return false;
+  } catch {
+    return true;
+  }
+}
 
 async function main() {
   const [rows] = await pool.query(
-    "SELECT id, title, resume_attempts FROM tasks WHERE ai_execution_status = 'in-progress'"
+    "SELECT id, title, resume_attempts, project_id FROM tasks WHERE ai_execution_status = 'in-progress'"
   );
 
   for (const t of rows) {
+    if (isProjectLocked(t.project_id)) {
+      console.error(`[reconcile] TF-${String(t.id).padStart(3, '0')} "${t.title}": project ${t.project_id} is locked by a live run-agent instance; skipping (not orphaned).`);
+      continue;
+    }
+
     const attempts = t.resume_attempts + 1;
     await pool.query('UPDATE tasks SET resume_attempts = ? WHERE id = ?', [attempts, t.id]);
 

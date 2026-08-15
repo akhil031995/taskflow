@@ -274,9 +274,15 @@ claude mcp add taskflow-mcp node /absolute/path/to/taskflow/mcp-server/index.js
 **The runner** — [`run-agent.sh`](run-agent.sh) (project root, `chmod +x`) is a
 self-contained scheduler. It:
 
-1. Takes a single-instance lock via `flock` on `/tmp/taskflow_ai.lock`
-   (auto-released on exit — no stale lock even after a kill), so two loops can't
-   run at once.
+1. Takes a **per-project** lock via `flock` (one file per `project_id` under
+   `/tmp/taskflow-agent-locks/`, auto-released on exit — no stale lock even
+   after a kill) right before working a claimed ticket, so multiple
+   `run-agent.sh` instances can run at once and make progress on **different**
+   projects in parallel, while guaranteeing no two ever touch the same
+   project's working directory concurrently. If a claimed ticket's project is
+   already locked by another instance, the ticket is handed straight back to
+   the queue and that instance retries shortly after (see `TASKFLOW_SKIP_RETRY`
+   below), rather than blocking.
 2. **Runs once immediately**, then loops: `cd`s into the project and runs
    `claude --dangerously-skip-permissions -p "$(cat AGENT_PROMPT.md)"`, teeing
    each session to `/tmp/taskflow-agent-logs/`.
@@ -312,8 +318,17 @@ nohup ./run-agent.sh >> /tmp/taskflow-agent-loop.log 2>&1 &   # background
 ```
 
 Tunable via env: `TASKFLOW_INTERVAL`, `TASKFLOW_RATE_BACKOFF`, `TASKFLOW_DIR`,
-`TASKFLOW_LOG_DIR`, `TASKFLOW_LOCK`. (For cron instead, use `--once` with a
-`*/30 * * * *` schedule.)
+`TASKFLOW_LOG_DIR`, `TASKFLOW_LOCK_DIR` (per-project lock files, default
+`/tmp/taskflow-agent-locks`), `TASKFLOW_SKIP_RETRY` (seconds before retrying
+after a claimed ticket's project turned out to be locked by another instance,
+default 60). (For cron instead, use `--once` with a `*/30 * * * *` schedule.)
+
+**Running projects in parallel:** start more than one `run-agent.sh` instance
+(e.g. a couple of `nohup ./run-agent.sh &` lines, or several systemd service
+units) - they share the same lock directory and self-serialize per project
+automatically, so up to N instances can each be mid-session on a different
+project at once, and none will ever run two sessions in the same
+`project_folder` simultaneously.
 
 ## License
 
