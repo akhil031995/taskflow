@@ -22,11 +22,14 @@ vanilla-JS frontend.
 
 | Layer      | Choice                                               |
 |------------|------------------------------------------------------|
-| Backend    | Vanilla PHP 8.2 (single `api.php` action router)     |
-| Database   | MySQL 8 (external, shared)                            |
+| Backend    | Vanilla PHP 8.4 (single `api.php` action router)     |
+| Database   | MySQL 8 (external, shared with the MCP server)        |
 | Frontend   | HTML5, vanilla JS, Tailwind (CDN), SortableJS, Quill  |
-| Runtime    | Docker Compose (PHP + Apache container)               |
+| Runtime    | Docker Compose (official `php:8.4-apache`)            |
+| AI plane   | Node.js MCP server (`mcp-server/`) + headless CLI     |
 | Auth       | None (local, single-user)                            |
+
+Served on **port 80** inside the container (fronted by the Caddy reverse proxy).
 
 ## Quick start
 
@@ -185,6 +188,119 @@ git push origin v1.0.0
 
 This publishes `ghcr.io/akhil031995/taskflow` tagged `1.0.0`, `1.0`, and `1`.
 The workflow can also be run manually from the Actions tab (`workflow_dispatch`).
+
+## AI Agent Control Plane
+
+TaskFlow doubles as the backlog for autonomous coding runs. Migration
+`003_ai_agent_fields.sql` extends `tasks` with numeric `priority` (1-High,
+2-Medium, 3-Low), `task_type`, `acceptance_criteria`, `ai_execution_status`,
+`ai_locked_at`, `ai_comments`, and `created_by`.
+
+- **Redesigned dark app-shell** (sidebar + topbar): Dashboard, Projects,
+  **Settings**, Backup, and **AI Agent Logs**.
+- **Board UI** shows `TF-###` keys, priority/type/`AI DRAFT` badges, a 🔒 lock
+  (drag disabled) while an agent is mid-run, interactive acceptance-criteria
+  checkboxes, and a recent *AI Comments* panel with timestamps (from `ai_comments`).
+- **MCP Settings & System Prompts** (`settings.php`): edit poll interval, launch
+  command, the agent system prompt, and operating rules (stored in `settings`).
+- **AI Agent Logs** (`logs.php`): a live, auto-refreshing table of every MCP tool
+  invocation with timestamp, ticket, status, and duration, grouped by **run**
+  (a `<select>` filters to one run-agent.sh execution at a time; "All runs" is
+  the default). Migration `004_mcp_control_plane.sql` adds the `settings` and
+  `mcp_invocations` tables; the MCP server writes a row per tool call.
+- **Per-run tracking** (migration `010_runs_table.sql` adds `runs`;
+  `011_run_tagging.sql` adds `run_id` to `mcp_invocations`/`ai_session_logs`
+  plus `runs.outcome`): `run-agent.sh` calls `mcp-server/start-run.js` to
+  insert a `runs` row (`started_at`) *before* launching Claude and exports its
+  id as `TASKFLOW_RUN_ID`, which the MCP server subprocess inherits and stamps
+  onto every invocation/session-log row it writes that session
+  (`logInvocation`/`sessionLog` in `db.js`). Claude runs with
+  `--output-format stream-json`, and after the session `record-run.js` parses
+  the log's terminal `result` event for token usage/`total_cost_usd` and
+  UPDATEs that same `runs` row with `finished_at`, `exit_code`, and `outcome`
+  (`success`/`error`/`rate_limited`). Rows written before this migration have
+  `run_id = NULL` and render under an "(unassigned)" run in the Logs UI.
+  Per-ticket cost shows as a `$` badge on board cards; per-project totals show
+  on the project header and the dashboard's Project Hub cards
+  (`get_task_run_cost`/`get_project_run_cost`/`get_all_project_run_costs` in
+  `includes/functions.php`).
+
+### Live session monitoring
+
+Watch active agent runs in real time (migration `006_live_session_logs.sql`
+adds `ai_session_logs`):
+
+- **Active Code Sessions** panel (bottom-left, every page) lists in-progress /
+  initializing / paused sessions with pulsing status dots
+  (`api.php?action=sessions.active`).
+- Selecting a session opens the **Live Claude Session drawer**: AI Conversation
+  (thoughts/status), Live Code View (colored diffs with per-file tabs), and a
+  Terminal console — streamed over **Server-Sent Events**
+  (`api.php?action=session.stream&task_id=X`) via `assets/session_monitor.js`,
+  which auto-scrolls the terminal and reconnects on drop.
+- The MCP server emits `status` / `thought` / `terminal` events per tool call.
+  An external **CLI wrapper** can push richer events (file reads/writes, command
+  output, unified diffs) to the ingest endpoint:
+
+  ```bash
+  curl -s "$TASKFLOW_URL/api.php?action=session.log" \
+    -H 'Content-Type: application/json' \
+    -d '{"task_id":4,"log_type":"code_diff","file_path":"src/foo.php","content":"@@ -1 +1 @@\n-old\n+new"}'
+  ```
+
+  `log_type` is one of `thought`, `terminal`, `code_diff`, `status`.
+- **`mcp-server/`** is a Node.js MCP server (mysql2) exposing four tools
+  (`get_highest_priority_ticket`, `update_ticket_status`, `add_ticket_comment`,
+  `create_ticket`) over stdio. See [mcp-server/README.md](mcp-server/README.md).
+- **`CLAUDE.md`** holds the agent's operating rules (surgical navigation, no git
+  commits, decomposition). **`AGENT_PROMPT.md`** is the exact per-run loop.
+
+### Autonomous execution (host orchestration)
+
+The MCP server does **not** launch Claude. The [`run-agent.sh`](run-agent.sh)
+loop on the **host** boots the Claude Code CLI headlessly; as Claude starts it
+connects to the registered `taskflow-mcp` server, calls
+`get_highest_priority_ticket`, and reads/writes files directly in the ticket's
+`project_folder`.
+
+**One-time host setup**
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude login                                   # authenticate once, interactively
+claude mcp add taskflow-mcp node /absolute/path/to/taskflow/mcp-server/index.js
+```
+
+**The runner** — [`run-agent.sh`](run-agent.sh) (project root, `chmod +x`) is a
+self-contained scheduler. It:
+
+1. Takes a single-instance lock via `flock` on `/tmp/taskflow_ai.lock`
+   (auto-released on exit — no stale lock even after a kill), so two loops can't
+   run at once.
+2. **Runs once immediately**, then loops: `cd`s into the project and runs
+   `claude --dangerously-skip-permissions -p "$(cat AGENT_PROMPT.md)"`, teeing
+   each session to `/tmp/taskflow-agent-logs/`.
+3. **Waits `INTERVAL` (default 30 min) between runs.** On a detected rate limit
+   it backs off `RATE_LIMIT_BACKOFF` (default 90 min) instead.
+
+```bash
+./run-agent.sh            # run now, then every 30 min, forever
+./run-agent.sh --once     # a single run then exit (for cron / testing)
+./run-agent.sh -i 10      # loop with a custom interval (10 min here)
+./run-agent.sh -t         # prompt for a ticket number (e.g. 34 for TF-034) and
+                           # run ONLY that ticket, ignoring priority, then exit
+```
+
+Because it blocks the terminal, run it persistently — e.g.:
+
+```bash
+nohup ./run-agent.sh >> /tmp/taskflow-agent-loop.log 2>&1 &   # background
+# …or a systemd service, or inside tmux/screen. Stop with Ctrl-C / kill.
+```
+
+Tunable via env: `TASKFLOW_INTERVAL`, `TASKFLOW_RATE_BACKOFF`, `TASKFLOW_DIR`,
+`TASKFLOW_LOG_DIR`, `TASKFLOW_LOCK`. (For cron instead, use `--once` with a
+`*/30 * * * *` schedule.)
 
 ## License
 

@@ -1,17 +1,25 @@
 # TaskFlow - docker-compose
-# Two services: a PHP+Apache web container and a MySQL database container.
-# The `web` service live-mounts ./src so you can edit code without rebuilding.
+# PHP 8.4 + Apache web container (serves on port 80, fronted by the Caddy
+# reverse proxy on homeserver-net). Database is the existing external MySQL 8
+# (`dev_taskflow`), shared with the Node.js MCP server under ./mcp-server.
+# Source is live-mounted (no rebuild).
 services:
   taskflow-dev:
     build:
       context: .
       dockerfile: Dockerfile
+    # In-container port 80, matching the rest of the stack (proxy targets :80).
     expose:
       - 80
     container_name: dev_taskflow
     volumes:
       # Live-mount application source for zero-rebuild development.
       - ./src:/var/www/html
+      # Read-only view of the host projects root so the folder picker can
+      # browse real directories. HOST_PROJECTS_ROOT (host path) is mounted at
+      # /workspaces inside the container; picked paths are translated back to
+      # the host path before saving.
+      - "${HOST_PROJECTS_ROOT:-/home/akhil/development}:/workspaces:ro"
     # Credentials come from the .env file (see .env.example). Compose loads
     # ./.env automatically for these ${VAR} substitutions; defaults are used
     # if a variable is unset.
@@ -21,6 +29,9 @@ services:
       DB_NAME: "${DB_NAME:-dev_taskflow}"
       DB_USER: "${DB_USER:-root}"
       DB_PASS: "${DB_PASS:-root}"
+      # Folder-picker: container mount point + the real host path it maps to.
+      WORKSPACES_DIR: /workspaces
+      HOST_PROJECTS_ROOT: "${HOST_PROJECTS_ROOT:-/home/akhil/development}"
 
     networks:
       - homeserver-net

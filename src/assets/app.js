@@ -60,6 +60,52 @@ document.getElementById('theme-toggle')?.addEventListener('click', () => {
 });
 
 // -------------------------------------------------------------------
+// Sidebar: Projects submenu toggle (delegated - robust to load timing)
+// -------------------------------------------------------------------
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('#nav-projects-toggle')) return;
+    document.getElementById('nav-projects-list')?.classList.toggle('hidden');
+    document.getElementById('nav-projects-caret')?.classList.toggle('rotate-90');
+});
+
+// -------------------------------------------------------------------
+// Sidebar: mobile open/close (overlay below the md breakpoint)
+// -------------------------------------------------------------------
+function openSidebar() {
+    document.getElementById('sidebar')?.classList.remove('-translate-x-full');
+    document.getElementById('sidebar-backdrop')?.classList.remove('hidden');
+}
+function closeSidebar() {
+    document.getElementById('sidebar')?.classList.add('-translate-x-full');
+    document.getElementById('sidebar-backdrop')?.classList.add('hidden');
+}
+document.addEventListener('click', (e) => {
+    if (e.target.closest('#sidebar-open')) return openSidebar();
+    if (e.target.closest('#sidebar-close') || e.target.closest('#sidebar-backdrop')) return closeSidebar();
+    // Tapping a nav link inside the sidebar on mobile should close the overlay.
+    if (e.target.closest('#sidebar a')) closeSidebar();
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeSidebar();
+});
+
+// -------------------------------------------------------------------
+// Global topbar search: filters any element carrying [data-search] and
+// its wrapper marked [data-searchable]. No reload.
+// -------------------------------------------------------------------
+document.getElementById('global-search')?.addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    document.querySelectorAll('[data-search]').forEach((el) => {
+        el.classList.toggle('hidden', q !== '' && !el.dataset.search.includes(q));
+    });
+    document.querySelectorAll('[data-empty-when-filtered]').forEach((el) => {
+        const scope = document.querySelector(el.dataset.emptyWhenFiltered);
+        const anyVisible = scope && [...scope.querySelectorAll('[data-search]')].some((n) => !n.classList.contains('hidden'));
+        el.classList.toggle('hidden', anyVisible || q === '');
+    });
+});
+
+// -------------------------------------------------------------------
 // Quick Links dropdown
 // -------------------------------------------------------------------
 (function initQuickLinks() {

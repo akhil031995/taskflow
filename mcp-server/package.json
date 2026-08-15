@@ -1,0 +1,26 @@
+{
+  "name": "taskflow-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server exposing TaskFlow's ticket database to headless Claude Code agents.",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "taskflow-mcp": "index.js",
+    "taskflow-repomap": "repomap-server.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "check": "node --check index.js && node --check repomap-server.js && node --check repomap-index.js",
+    "bootstrap-standards": "node bootstrap-standards.js",
+    "repomap:start": "node repomap-server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.7.0",
+    "dotenv": "^16.4.5",
+    "mysql2": "^3.11.0",
+    "zod": "^3.23.8"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

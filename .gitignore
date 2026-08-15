@@ -5,12 +5,16 @@
 
 # --- Database backups produced by the 1-Click Backup feature ---
 *.sql
-!src/migrations/*.sql          # keep versioned migrations tracked
+# Keep versioned migrations tracked (git only treats '#' as a comment marker
+# when it's the first character of the line, so this note must live above the
+# pattern, not trail it - a trailing '#' would be parsed as literal pattern
+# text and silently break the negation).
+!src/migrations/*.sql
 taskflow_backup_*.json
 
-# --- Dependencies (should any be added later) ---
+# --- Dependencies ---
 /vendor/
-/node_modules/
+node_modules/          # any depth (e.g. mcp-server/node_modules)
 composer.lock
 
 # --- Editor / OS cruft ---

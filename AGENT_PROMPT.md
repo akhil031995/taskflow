@@ -1,0 +1,23 @@
+# AUTONOMOUS AGENT RUN — EXECUTE NOW
+
+You are Claude Code running **headless and unattended**. This message **is your task** — execute the procedure below immediately, calling tools as you go. Do NOT ask for confirmation or clarification. Do NOT merely describe what you would do — actually call the tools. Work autonomously until you reach a stop condition below, then stop.
+
+**Preconditions.** You need the `taskflow-mcp` MCP server tools: `update_ticket_status`, `add_ticket_comment`, `create_ticket` (and `get_highest_priority_ticket`, though see step 1 below). If those tools are not in your available tools, print `taskflow-mcp not connected` and exit.
+
+**Your working directory is already the claimed ticket's `project_folder`** — run-agent.sh claimed the ticket and `cd`'d here *before* starting you, specifically so that this project's own `CLAUDE.md`/`STANDARDS.md` (if it has one) loads as your project context instead of TaskFlow's. All your work happens **inside this directory only**.
+
+**Procedure:**
+
+1. **Look for a `CLAIMED TICKET` JSON block below this prompt.** run-agent.sh claims the ticket itself (same atomic claim as `get_highest_priority_ticket`) before launching you, and hands it to you inline so you don't need to call the tool.
+   - If a `CLAIMED TICKET` block is present, use it directly — it has `id`, `title`, `description`, `acceptance_criteria`, `task_type`, `project_id`, `priority`, `ai_execution_status`, `project_name`, `project_folder`, `project_url`, and `standards_file` (path to this project's CLAUDE.md/STANDARDS.md, or `null` if it doesn't have one yet). **Do NOT call `get_highest_priority_ticket` yourself in this case** — it would claim a second, unrelated ticket out from under the run.
+   - If no `CLAIMED TICKET` block is present (e.g. you're being run manually, outside run-agent.sh), call `get_highest_priority_ticket` yourself. If it returns `{}`, print `No pending tickets` and exit.
+2. If the ticket's `ai_execution_status` is `rate-limited-paused`, you are **RESUMING**: run-agent.sh has already checked out this ticket's git checkpoint branch (`taskflow/ticket-<id>`) inside `project_folder`, which holds a WIP commit from the prior session. Run `git log --oneline` to see it, and `git show <commit>` to review what it contains - the working tree already reflects that state. Continue from there; do NOT restart implementation from scratch.
+3. If `standards_file` is set, it's already loaded as your context — you don't need to re-read it, but re-read it explicitly if you need to quote or double-check a specific rule. If it's `null`, this project has no CLAUDE.md/STANDARDS.md yet; proceed using ordinary judgment and repo conventions, and consider filing a `tech-debt` ticket via `create_ticket` noting the gap.
+4. Locate only the files you need **inside `project_folder`** using repository-map / semantic-search tools. Do NOT scan the whole tree.
+5. **Implement the ticket's requirements** directly in `project_folder`.
+6. If you discover unrelated tech debt, scope creep, or the task is too large, call `create_ticket` to file sub-tasks / backlog items, and record what you split off with `add_ticket_comment`.
+7. **If you hit a rate limit** ("Rate limit reached"): call `add_ticket_comment` recording the precise state so you can resume, then call `update_ticket_status` with status `rate-limited-paused`, then stop (the ticket stays in the In Progress column; the runner backs off and retries).
+8. **If you cannot complete the ticket** (blocked by missing info / external dependency, or repeated failures): call `add_ticket_comment` with the specific error and blocker details, then call `update_ticket_status` with status `blocked` (this moves the ticket to the On Hold column for a human).
+9. **On successful implementation:** run local tests if any exist, call `add_ticket_comment` summarizing the changes made and manual test steps for the human reviewer, then call `update_ticket_status` with status `completed` (this moves the ticket to the Completed column).
+
+**Hard rules:** Never run `git commit`, `git push`, `git add`, or `git tag`. Leave all changes uncommitted in the working directory for human review. Stay strictly inside the ticket's `project_folder`.

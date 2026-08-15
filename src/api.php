@@ -26,6 +26,13 @@ if ($action === 'backup') {
     exit;
 }
 
+// The SSE stream manages its own headers and runs a long-lived loop, so it is
+// dispatched before the JSON error wrapper too.
+if ($action === 'session.stream') {
+    handle_session_stream();
+    exit;
+}
+
 try {
     switch ($action) {
         // ---- Tasks -------------------------------------------------------
@@ -33,6 +40,8 @@ try {
         case 'task.update':  json_response(task_update());  break;
         case 'task.move':    json_response(task_move());    break;
         case 'task.delete':  json_response(task_delete());  break;
+        case 'task.criteria': json_response(task_criteria()); break;
+        case 'task.get':     json_response(task_get());     break;
 
         // ---- Notes -------------------------------------------------------
         case 'note.create':  json_response(note_create());  break;
@@ -47,6 +56,27 @@ try {
         // ---- Projects ----------------------------------------------------
         case 'project.create': json_response(project_create()); break;
         case 'project.delete': json_response(project_delete()); break;
+
+        // ---- Standards (org baseline + per-project override) -------------
+        case 'project.standards.get':  json_response(project_standards_get());  break;
+        case 'project.standards.save': json_response(project_standards_save()); break;
+
+        // ---- Definition-of-Done gates (per-project lint/test/build) ------
+        case 'project.dod.get':  json_response(project_dod_get());  break;
+        case 'project.dod.save': json_response(project_dod_save()); break;
+
+        // ---- Control plane -----------------------------------------------
+        case 'settings.save': json_response(settings_save()); break;
+        case 'mcp.logs':        json_response(mcp_logs());        break;
+        case 'mcp.runs':        json_response(mcp_runs());        break;
+        case 'mcp.tool_usage':  json_response(mcp_tool_usage());   break;
+        case 'mcp.by_ticket':   json_response(mcp_by_ticket());    break;
+        case 'mcp.timeline':    json_response(mcp_timeline());     break;
+        case 'fs.list':         json_response(fs_list());          break;
+
+        // ---- Live sessions -----------------------------------------------
+        case 'sessions.active': json_response(sessions_active()); break;
+        case 'session.log':     json_response(session_log());     break;
 
         default:
             json_response(['ok' => false, 'error' => 'Unknown action'], 400);
@@ -71,12 +101,23 @@ function task_create(): array
         json_response(['ok' => false, 'error' => 'project_id and title are required'], 422);
     }
 
-    $status   = validate_status($in['status'] ?? 'pending');
-    $priority = validate_priority($in['priority'] ?? 'medium');
+    $status    = validate_status($in['status'] ?? 'pending');
+    $priority  = validate_priority($in['priority'] ?? 2);
+    $taskType  = validate_task_type($in['task_type'] ?? 'feature');
+    $createdBy = (($in['created_by'] ?? 'human') === 'ai') ? 'ai' : 'human';
+
+    // Enforce an acceptance-criteria template: never save a ticket without one.
+    // Falls back to this project's own DoD override before the org default.
+    $criteria = trim((string) ($in['acceptance_criteria'] ?? ''));
+    if ($criteria === '') {
+        $criteria = effective_acceptance_criteria($projectId);
+    }
 
     $stmt = db()->prepare(
-        'INSERT INTO tasks (project_id, title, description, status, priority, position)
-         VALUES (?, ?, ?, ?, ?, 0)'
+        'INSERT INTO tasks
+            (project_id, title, description, status, priority, position,
+             task_type, acceptance_criteria, created_by, ai_execution_status)
+         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)'
     );
     $stmt->execute([
         $projectId,
@@ -84,6 +125,10 @@ function task_create(): array
         trim((string) ($in['description'] ?? '')),
         $status,
         $priority,
+        $taskType,
+        $criteria,
+        $createdBy,
+        'pending',
     ]);
 
     $id = (int) db()->lastInsertId();
@@ -99,13 +144,18 @@ function task_update(): array
     }
 
     $stmt = db()->prepare(
-        'UPDATE tasks SET title = ?, description = ?, priority = ?, status = ? WHERE id = ?'
+        'UPDATE tasks
+            SET title = ?, description = ?, priority = ?, status = ?,
+                task_type = ?, acceptance_criteria = ?
+          WHERE id = ?'
     );
     $stmt->execute([
         trim((string) ($in['title'] ?? '')),
         trim((string) ($in['description'] ?? '')),
-        validate_priority($in['priority'] ?? 'medium'),
+        validate_priority($in['priority'] ?? 2),
         validate_status($in['status'] ?? 'pending'),
+        validate_task_type($in['task_type'] ?? 'feature'),
+        trim((string) ($in['acceptance_criteria'] ?? '')),
         $id,
     ]);
 
@@ -157,6 +207,290 @@ function task_delete(): array
     $stmt = db()->prepare('DELETE FROM tasks WHERE id = ?');
     $stmt->execute([$id]);
     return ['ok' => true];
+}
+
+/** Full task detail for the detail modal (task + project + parsed comments/criteria). */
+function task_get(): array
+{
+    $id = (int) (json_input()['id'] ?? ($_GET['id'] ?? 0));
+    if ($id <= 0) {
+        json_response(['ok' => false, 'error' => 'id is required'], 422);
+    }
+    $t = get_task($id);
+    if (!$t) {
+        json_response(['ok' => false, 'error' => 'Task not found'], 404);
+    }
+    $p  = get_project((int) $t['project_id']);
+    $pk = priority_key($t['priority'] ?? 2);
+
+    return [
+        'ok'             => true,
+        'task'           => $t,           // timestamps already IST via the +05:30 session
+        'key'            => ticket_key($id),
+        'priority_label' => PRIORITY_PILLS[$pk] ?? '',
+        'priority_class' => PRIORITY_PILL_CLASSES[$pk] ?? '',
+        'type_label'     => ucwords(str_replace('-', ' ', $t['task_type'] ?? 'feature')),
+        'comments'       => parse_ai_comments($t['ai_comments'] ?? ''),
+        'criteria'       => parse_acceptance_criteria($t['acceptance_criteria'] ?? ''),
+        'project'        => $p ? [
+            'id'          => (int) $p['id'],
+            'name'        => $p['name'],
+            'color'       => $p['color'],
+            'folder_path' => $p['folder_path'],
+            'access_url'  => $p['access_url'],
+        ] : null,
+    ];
+}
+
+/** Persist an acceptance-criteria checklist edit from the card. */
+function task_criteria(): array
+{
+    $in = json_input();
+    $id = (int) ($in['id'] ?? 0);
+    if ($id <= 0) {
+        json_response(['ok' => false, 'error' => 'id is required'], 422);
+    }
+    $stmt = db()->prepare('UPDATE tasks SET acceptance_criteria = ? WHERE id = ?');
+    $stmt->execute([(string) ($in['acceptance_criteria'] ?? ''), $id]);
+    return ['ok' => true];
+}
+
+// ===================================================================
+// Control-plane handlers (settings + MCP logs)
+// ===================================================================
+
+/** Persist a batch of whitelisted settings. */
+function settings_save(): array
+{
+    $in       = json_input();
+    $settings = $in['settings'] ?? [];
+    if (!is_array($settings)) {
+        json_response(['ok' => false, 'error' => 'settings object required'], 422);
+    }
+
+    // Only known keys may be written from the UI.
+    $allowed = [
+        'mcp_poll_interval_minutes',
+        'mcp_server_command',
+        'mcp_enabled',
+        'agent_system_prompt',
+        'agent_operating_rules',
+        'host_projects_root',
+        'org_standards_baseline',
+    ];
+
+    $saved = 0;
+    foreach ($settings as $key => $value) {
+        if (in_array($key, $allowed, true)) {
+            set_setting($key, is_scalar($value) ? (string) $value : json_encode($value));
+            $saved++;
+        }
+    }
+    return ['ok' => true, 'saved' => $saved];
+}
+
+/**
+ * Server-side directory browser for the project folder picker.
+ * Lists subdirectories under the mounted projects root ($WORKSPACES_DIR),
+ * translating container paths back to the real host path for storage.
+ * Traversal-guarded: never escapes the mounted base.
+ */
+function fs_list(): array
+{
+    $base     = rtrim(getenv('WORKSPACES_DIR') ?: '/workspaces', '/');
+    $hostRoot = rtrim(get_setting('host_projects_root', getenv('HOST_PROJECTS_ROOT') ?: '/home/akhil/development'), '/');
+
+    if (!is_dir($base)) {
+        json_response(['ok' => false, 'error' => 'Projects root is not mounted at ' . $base . '. Add the volume and restart.'], 400);
+    }
+
+    $rel    = ltrim((string) (json_input()['path'] ?? ''), '/');
+    $target = $rel === '' ? $base : $base . '/' . $rel;
+    $real   = realpath($target);
+
+    // Reject anything that resolves outside the mounted base.
+    if ($real === false || strpos($real . '/', $base . '/') !== 0) {
+        json_response(['ok' => false, 'error' => 'Path not accessible'], 400);
+    }
+
+    $dirs = [];
+    foreach (scandir($real) ?: [] as $entry) {
+        if ($entry === '.' || $entry === '..' || $entry[0] === '.') {
+            continue; // skip dotfiles / dotdirs
+        }
+        if (is_dir($real . '/' . $entry)) {
+            $dirs[] = $entry;
+        }
+    }
+    sort($dirs, SORT_NATURAL | SORT_FLAG_CASE);
+
+    $relClean = ltrim(substr($real, strlen($base)), '/');
+    $hostPath = $relClean === '' ? $hostRoot : $hostRoot . '/' . $relClean;
+
+    $parent = null;
+    if ($relClean !== '') {
+        $d = dirname($relClean);
+        $parent = ($d === '.') ? '' : $d;
+    }
+
+    return [
+        'ok'        => true,
+        'rel'       => $relClean,
+        'host_path' => $hostPath,
+        'parent'    => $parent,   // null when at the root
+        'dirs'      => $dirs,
+    ];
+}
+
+// ===================================================================
+// Live session monitoring
+// ===================================================================
+
+/** List active / initializing / paused sessions for the selector panel. */
+function sessions_active(): array
+{
+    $rows = get_active_sessions(30);
+    $sessions = array_map(function ($r) {
+        $meta = SESSION_STATUS_META[$r['status']] ?? ['label' => strtoupper($r['status']), 'dot' => 'bg-slate-400', 'pulse' => false];
+        return [
+            'id'            => (int) $r['id'],
+            'key'           => ticket_key($r['id']),
+            'title'         => $r['title'],
+            'status'        => $r['status'],
+            'label'         => $meta['label'],
+            'dot'           => $meta['dot'],
+            'pulse'         => $meta['pulse'],
+            'project_id'    => (int) $r['project_id'],
+            'project_name'  => $r['project_name'],
+            'last_activity' => $r['last_activity'],
+        ];
+    }, $rows);
+    return ['ok' => true, 'sessions' => $sessions];
+}
+
+/**
+ * Ingest a live log entry from the MCP server or CLI wrapper.
+ * Body: { task_id, log_type, content, file_path? }
+ */
+function session_log(): array
+{
+    $in      = json_input();
+    $taskId  = (int) ($in['task_id'] ?? 0);
+    $logType = (string) ($in['log_type'] ?? '');
+    $content = (string) ($in['content'] ?? '');
+
+    if ($taskId <= 0 || !in_array($logType, SESSION_LOG_TYPES, true)) {
+        json_response(['ok' => false, 'error' => 'task_id and a valid log_type are required'], 422);
+    }
+
+    $stmt = db()->prepare(
+        'INSERT INTO ai_session_logs (task_id, log_type, content, file_path) VALUES (?, ?, ?, ?)'
+    );
+    $stmt->execute([
+        $taskId,
+        $logType,
+        $content,
+        ($in['file_path'] ?? null) ? (string) $in['file_path'] : null,
+    ]);
+    return ['ok' => true, 'id' => (int) db()->lastInsertId()];
+}
+
+/**
+ * Server-Sent Events stream of session logs for one task.
+ * Emits each new ai_session_logs row as it appears. Bounded runtime; the
+ * browser's EventSource reconnects automatically (resuming via Last-Event-ID).
+ */
+function handle_session_stream(): void
+{
+    $taskId = (int) ($_GET['task_id'] ?? 0);
+    $lastId = (int) ($_GET['last_id'] ?? ($_SERVER['HTTP_LAST_EVENT_ID'] ?? 0));
+
+    header('Content-Type: text/event-stream');
+    header('Cache-Control: no-cache');
+    header('Connection: keep-alive');
+    header('X-Accel-Buffering: no'); // ask proxies (nginx) not to buffer
+
+    // Flush any output buffering so events reach the browser immediately.
+    while (ob_get_level() > 0) {
+        ob_end_flush();
+    }
+    ob_implicit_flush(true);
+
+    if ($taskId <= 0) {
+        echo "event: error\ndata: {\"error\":\"task_id required\"}\n\n";
+        return;
+    }
+
+    @set_time_limit(0);
+    $deadline = time() + 60; // bounded; client reconnects after this
+
+    // Tell the client how quickly to retry on disconnect.
+    echo "retry: 3000\n\n";
+
+    while (time() < $deadline) {
+        $rows = get_session_logs($taskId, $lastId, 200);
+        foreach ($rows as $row) {
+            $lastId = (int) $row['id'];
+            echo 'id: ' . $lastId . "\n";
+            echo 'event: log' . "\n";
+            echo 'data: ' . json_encode($row) . "\n\n";
+        }
+        if (empty($rows)) {
+            echo ": keepalive\n\n"; // comment frame keeps the connection warm
+        }
+        if (connection_aborted()) {
+            break;
+        }
+        @flush();
+        sleep(2);
+    }
+}
+
+/** Return recent MCP invocations for the live logs table, optionally scoped to one run. */
+function mcp_logs(): array
+{
+    $in    = json_input();
+    $limit = (int) ($in['limit'] ?? 100);
+    $tool  = trim((string) ($in['tool'] ?? ''));
+    $runId = trim((string) ($in['run_id'] ?? ''));
+    $stats = get_mcp_log_stats();
+    return [
+        'ok'    => true,
+        'total' => $stats['total'],
+        'logs'  => get_mcp_logs($limit, $tool, $runId),
+    ];
+}
+
+/** Return recent runs for the logs screen's run filter dropdown. */
+function mcp_runs(): array
+{
+    $in    = json_input();
+    $limit = (int) ($in['limit'] ?? 50);
+    return ['ok' => true, 'runs' => get_runs($limit)];
+}
+
+/** Tool-usage breakdown (dashboard card top-N, or the Logs "By Tool"/"By Server" tabs). */
+function mcp_tool_usage(): array
+{
+    $in    = json_input();
+    $limit = isset($in['limit']) && $in['limit'] !== '' ? (int) $in['limit'] : null;
+    return ['ok' => true, 'tools' => get_tool_usage_stats($limit)];
+}
+
+/** Call counts grouped by ticket, for the Logs "By Ticket" tab. */
+function mcp_by_ticket(): array
+{
+    $in    = json_input();
+    $limit = (int) ($in['limit'] ?? 50);
+    return ['ok' => true, 'tickets' => get_ticket_usage_stats($limit)];
+}
+
+/** Daily call-volume timeline, for the Logs "Timeline" tab. */
+function mcp_timeline(): array
+{
+    $in   = json_input();
+    $days = (int) ($in['days'] ?? 14);
+    return ['ok' => true, 'days' => get_tool_usage_timeline($days)];
 }
 
 // ===================================================================
@@ -273,8 +607,19 @@ function project_create(): array
         $color = '#3b82f6';
     }
 
-    $stmt = db()->prepare('INSERT INTO projects (name, description, color) VALUES (?, ?, ?)');
-    $stmt->execute([$name, trim((string) ($in['description'] ?? '')), $color]);
+    // Optional workspace metadata: where the agent implements + how to reach it.
+    $folder = trim((string) ($in['folder_path'] ?? '')) ?: null;
+    $url    = trim((string) ($in['access_url'] ?? ''));
+    if ($url !== '' && !preg_match('~^https?://~i', $url)) {
+        $url = 'https://' . $url;
+    }
+    $url = $url !== '' ? $url : null;
+
+    $stmt = db()->prepare(
+        'INSERT INTO projects (name, description, color, folder_path, access_url)
+         VALUES (?, ?, ?, ?, ?)'
+    );
+    $stmt->execute([$name, trim((string) ($in['description'] ?? '')), $color, $folder, $url]);
     return ['ok' => true, 'id' => (int) db()->lastInsertId()];
 }
 
@@ -288,6 +633,68 @@ function project_delete(): array
     $stmt = db()->prepare('DELETE FROM projects WHERE id = ?');
     $stmt->execute([$id]);
     return ['ok' => true];
+}
+
+// ===================================================================
+// Standards handlers (org baseline lives in `settings`, see settings_save();
+// per-project override lives in `project_standards`).
+// ===================================================================
+
+/** Return a project's override text plus the resolved effective standards. */
+function project_standards_get(): array
+{
+    $id = (int) (json_input()['project_id'] ?? 0);
+    if ($id <= 0 || !get_project($id)) {
+        json_response(['ok' => false, 'error' => 'valid project_id is required'], 422);
+    }
+    return [
+        'ok'        => true,
+        'baseline'  => get_org_standards_baseline(),
+        'override'  => get_project_standards_override($id) ?? '',
+        'effective' => resolve_effective_standards($id),
+    ];
+}
+
+/** Save a project's standards override. */
+function project_standards_save(): array
+{
+    $in = json_input();
+    $id = (int) ($in['project_id'] ?? 0);
+    if ($id <= 0 || !get_project($id)) {
+        json_response(['ok' => false, 'error' => 'valid project_id is required'], 422);
+    }
+    set_project_standards_override($id, (string) ($in['override'] ?? ''));
+    return ['ok' => true, 'effective' => resolve_effective_standards($id)];
+}
+
+// ===================================================================
+// Definition-of-Done gate handlers (per-project lint/test/build commands +
+// acceptance-criteria override; run by mcp-server on update_ticket_status).
+// ===================================================================
+
+/** Return a project's DoD gate config plus the org default criteria template. */
+function project_dod_get(): array
+{
+    $id = (int) (json_input()['project_id'] ?? 0);
+    if ($id <= 0 || !get_project($id)) {
+        json_response(['ok' => false, 'error' => 'valid project_id is required'], 422);
+    }
+    return [
+        'ok'                => true,
+        'default_criteria'  => ACCEPTANCE_CRITERIA_TEMPLATE,
+    ] + get_project_dod_gates($id);
+}
+
+/** Save a project's DoD gate config. */
+function project_dod_save(): array
+{
+    $in = json_input();
+    $id = (int) ($in['project_id'] ?? 0);
+    if ($id <= 0 || !get_project($id)) {
+        json_response(['ok' => false, 'error' => 'valid project_id is required'], 422);
+    }
+    set_project_dod_gates($id, $in);
+    return ['ok' => true] + get_project_dod_gates($id);
 }
 
 // ===================================================================
@@ -358,7 +765,15 @@ function validate_status(string $status): string
     return array_key_exists($status, TASK_STATUSES) ? $status : 'pending';
 }
 
-function validate_priority(string $priority): string
+/** Numeric priority 1-3, defaulting to 2-Medium. */
+function validate_priority($priority): int
 {
-    return array_key_exists($priority, PRIORITY_COLORS) ? $priority : 'medium';
+    $n = (int) $priority;
+    return array_key_exists($n, PRIORITY_COLORS) ? $n : 2;
+}
+
+/** Task type, defaulting to 'feature'. */
+function validate_task_type(string $type): string
+{
+    return in_array($type, TASK_TYPES, true) ? $type : 'feature';
 }
