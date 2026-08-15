@@ -66,7 +66,8 @@ try {
         case 'project.dod.save': json_response(project_dod_save()); break;
 
         // ---- Control plane -----------------------------------------------
-        case 'settings.save': json_response(settings_save()); break;
+        case 'settings.save':          json_response(settings_save());          break;
+        case 'settings.test.telegram': json_response(settings_test_telegram()); break;
         case 'mcp.logs':        json_response(mcp_logs());        break;
         case 'mcp.runs':        json_response(mcp_runs());        break;
         case 'mcp.tool_usage':  json_response(mcp_tool_usage());   break;
@@ -301,6 +302,48 @@ function settings_save(): array
         }
     }
     return ['ok' => true, 'saved' => $saved];
+}
+
+/**
+ * Sends a dummy "TF-00" update message to the given Telegram chat, using the
+ * bot token / chat ID currently in the settings form (not necessarily saved
+ * yet), so a user can verify the connection before persisting it.
+ */
+function settings_test_telegram(): array
+{
+    $in       = json_input();
+    $botToken = trim((string) ($in['bot_token'] ?? ''));
+    $chatId   = trim((string) ($in['chat_id'] ?? ''));
+
+    if ($botToken === '' || $chatId === '') {
+        json_response(['ok' => false, 'error' => 'Bot token and chat ID are required'], 422);
+    }
+
+    $text = "TaskFlow TF-00 Test connection\nThis is a dummy update message confirming your Telegram bot is configured correctly.";
+
+    $ch = curl_init("https://api.telegram.org/bot{$botToken}/sendMessage");
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+        CURLOPT_POSTFIELDS     => json_encode(['chat_id' => $chatId, 'text' => $text]),
+        CURLOPT_TIMEOUT        => 10,
+    ]);
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlErr  = curl_error($ch);
+    curl_close($ch);
+
+    if ($response === false) {
+        return ['ok' => false, 'error' => "Request failed: {$curlErr}"];
+    }
+
+    $decoded = json_decode($response, true);
+    if ($httpCode !== 200 || !($decoded['ok'] ?? false)) {
+        return ['ok' => false, 'error' => $decoded['description'] ?? "Telegram API responded {$httpCode}"];
+    }
+
+    return ['ok' => true];
 }
 
 /**

@@ -150,6 +150,10 @@ require __DIR__ . '/includes/header.php';
                         class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
                 </label>
             </div>
+            <div class="mt-3 flex items-center gap-3">
+                <button id="telegram-test-btn" type="button" class="px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800">Test connection</button>
+                <span id="telegram-test-result" class="text-xs text-slate-500"></span>
+            </div>
         </div>
 
         <div class="mb-5 pb-5 border-b border-slate-100 dark:border-slate-800">
@@ -220,6 +224,32 @@ document.getElementById('settings-save').addEventListener('click', async () => {
         toast('Settings saved');
     } catch (err) {
         toast(err.message, 'error');
+    }
+});
+
+document.getElementById('telegram-test-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('telegram-test-btn');
+    const result = document.getElementById('telegram-test-result');
+    const botToken = document.querySelector('[data-setting="notify_telegram_bot_token"]').value.trim();
+    const chatId = document.querySelector('[data-setting="notify_telegram_chat_id"]').value.trim();
+    if (!botToken || !chatId) {
+        toast('Enter a bot token and chat ID first', 'error');
+        return;
+    }
+    btn.disabled = true;
+    result.textContent = 'Sending…';
+    result.className = 'text-xs text-slate-500';
+    try {
+        await api('settings.test.telegram', { bot_token: botToken, chat_id: chatId });
+        result.textContent = 'Sent ✓';
+        result.className = 'text-xs text-emerald-500';
+        toast('Test message sent to Telegram');
+    } catch (err) {
+        result.textContent = 'Failed';
+        result.className = 'text-xs text-red-500';
+        toast(err.message, 'error');
+    } finally {
+        btn.disabled = false;
     }
 });
 </script>
