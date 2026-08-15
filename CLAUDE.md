@@ -28,6 +28,10 @@ implementing one ticket per run. Keep this file lean - it is cached across runs.
   history-mutating git command. Code stays uncommitted for human review.
 - `git diff` / `git status` (read-only inspection) are allowed, and are how you
   resume a paused ticket.
+- Once you report `completed`, run-agent.sh (not you) commits your checkpoint
+  and auto-merges it into the base branch locally - still never pushed. A
+  merge conflict there blocks the ticket for a human instead of guessing a
+  resolution; that's expected, not something to work around.
 
 ## Scope control & decomposition
 

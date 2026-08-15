@@ -7,19 +7,21 @@
  * column - reconcile.js would keep flipping it to rate-limited-paused and
  * run-agent.sh would keep re-claiming and re-failing it forever.
  *
- * Usage: node block-ticket.js <task_id> "<reason>"
+ * Usage: node block-ticket.js <task_id> "<reason>" [stage]
+ * `stage` labels WHEN this happened (default "pre-flight"); git_checkpoint_finish
+ * passes "post-run merge" when a completed ticket's auto-merge conflicted.
  */
 import { pool, markTicketBlocked } from './db.js';
 
-const [, , taskIdArg, reason] = process.argv;
+const [, , taskIdArg, reason, stage] = process.argv;
 const taskId = Number(taskIdArg);
 
 async function main() {
   if (!taskId || !reason) {
-    console.error('[block-ticket] usage: node block-ticket.js <task_id> "<reason>"');
+    console.error('[block-ticket] usage: node block-ticket.js <task_id> "<reason>" [stage]');
     process.exit(1);
   }
-  await markTicketBlocked(taskId, reason);
+  await markTicketBlocked(taskId, reason, stage || undefined);
   console.error(`[block-ticket] TF-${taskId} marked blocked.`);
   await pool.end();
 }

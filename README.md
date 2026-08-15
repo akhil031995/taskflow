@@ -282,13 +282,26 @@ self-contained scheduler. It:
    each session to `/tmp/taskflow-agent-logs/`.
 3. **Waits `INTERVAL` (default 30 min) between runs.** On a detected rate limit
    it backs off `RATE_LIMIT_BACKOFF` (default 90 min) instead.
+4. **Git-checkpoints every run**, since Claude itself is forbidden from
+   committing. Before Claude starts, it checks out (or resumes) a scratch
+   branch `taskflow/ticket-<id>` off the base branch (`main`/`master`).
+   After Claude's session ends it commits whatever's in the working tree
+   there as a WIP snapshot - always, so no work is ever lost to a later
+   `git checkout --`/`rm -rf`, regardless of outcome. Then, only if the
+   ticket's **database** status (not Claude's process exit code) actually
+   came back `completed`, it auto-merges that branch into the base branch
+   with a normal local `git merge` - never pushed anywhere. If that merge
+   conflicts, it's aborted immediately (`git merge --abort`, base branch
+   left untouched) and the ticket is flipped to `blocked`/On Hold with the
+   conflicting file list attached, for a human to resolve by hand.
+   `blocked` and `rate-limited-paused` tickets are never auto-merged.
 
 ```bash
 ./run-agent.sh            # run now, then every 30 min, forever
 ./run-agent.sh --once     # a single run then exit (for cron / testing)
 ./run-agent.sh -i 10      # loop with a custom interval (10 min here)
-./run-agent.sh -t         # prompt for a ticket number (e.g. 34 for TF-034) and
-                           # run ONLY that ticket, ignoring priority, then exit
+./run-agent.sh -t 34      # run ONLY TF-034, ignoring priority, then exit
+./run-agent.sh -t         # same, but prompts interactively for the ticket number
 ```
 
 Because it blocks the terminal, run it persistently — e.g.:

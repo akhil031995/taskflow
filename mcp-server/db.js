@@ -273,12 +273,16 @@ export async function claimTicketById(id) {
 }
 
 /**
- * Mark a ticket blocked from the host shell, for failures run-agent.sh can
- * detect before Claude even starts (e.g. a claimed ticket whose project_folder
- * doesn't exist on this host) - so it reaches the human-visible On Hold column
- * instead of sitting locked in-progress forever.
+ * Mark a ticket blocked from the host shell (not from Claude), for failures
+ * run-agent.sh itself detects - before Claude starts (e.g. a claimed ticket
+ * whose project_folder doesn't exist on this host), between runs (reconcile.js
+ * giving up on a repeatedly-orphaned session), or after Claude ends (a
+ * conflicting auto-merge in git_checkpoint_finish) - so it reaches the
+ * human-visible On Hold column instead of sitting locked in-progress forever.
+ * `stage` labels WHEN in the harness's lifecycle this happened, since that's
+ * not derivable from the reason text alone.
  */
-export async function markTicketBlocked(taskId, reason) {
+export async function markTicketBlocked(taskId, reason, stage = 'pre-flight') {
   const note = `\n[${new Date().toISOString()}] ${reason}`;
   const [res] = await pool.query(
     `UPDATE tasks
@@ -288,5 +292,38 @@ export async function markTicketBlocked(taskId, reason) {
     [note, taskId]
   );
   if (res.affectedRows === 0) throw new Error(`No ticket with id ${taskId}`);
-  await sessionLog(taskId, 'status', `Blocked by harness (pre-flight): ${reason}`);
+  await sessionLog(taskId, 'status', `Blocked by harness (${stage}): ${reason}`);
+}
+
+/**
+ * Read a ticket's CURRENT lifecycle state. run-agent.sh calls this right
+ * after a Claude session ends, to decide whether the just-finished session's
+ * checkpoint branch is eligible for auto-merge - the process exit code alone
+ * isn't trustworthy for that decision (a session can exit 0 after already
+ * calling update_ticket_status('blocked') mid-session, and a crashed session
+ * can exit non-zero while the ticket is still sitting 'in-progress',
+ * unreconciled). Only the DB's ai_execution_status is authoritative.
+ */
+export async function getTicketState(taskId) {
+  const [rows] = await pool.query(
+    `SELECT ai_execution_status, status FROM tasks WHERE id = ?`,
+    [taskId]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Record that a completed ticket's checkpoint branch was auto-merged into the
+ * base branch by run-agent.sh - both as a durable ai_comments entry and a
+ * Live Session drawer / Agent Logs entry, so the merge is visible next to the
+ * rest of the ticket's history.
+ */
+export async function recordMerge(taskId, scratchBranch, baseBranch) {
+  const note = `\n[${new Date().toISOString()}] Auto-merged ${scratchBranch} into ` +
+    `${baseBranch} (clean merge, no conflicts).`;
+  await pool.query(
+    `UPDATE tasks SET ai_comments = CONCAT(COALESCE(ai_comments, ''), ?) WHERE id = ?`,
+    [note, taskId]
+  );
+  await sessionLog(taskId, 'status', `Auto-merged ${scratchBranch} into ${baseBranch}.`);
 }

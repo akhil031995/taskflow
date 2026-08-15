@@ -25,12 +25,23 @@
 # scratch branch `taskflow/ticket-<id>` and commit a WIP snapshot there at run
 # end. Nothing is ever pushed to a remote. See git_checkpoint_* below.
 #
+# Auto-merge: once a ticket's checkpoint branch holds a session that actually
+# COMPLETED (checked against the DB's ai_execution_status, not the process
+# exit code - see git_checkpoint_finish), it's merged straight back into the
+# base branch with a normal local `git merge`, so main doesn't accumulate an
+# ever-growing pile of sibling ticket branches off a stale base. Still no
+# `git push` anywhere. If that merge conflicts, it's aborted immediately
+# (`git merge --abort`) - base branch is left untouched and the ticket is
+# flipped to blocked (On Hold) with the conflicting file list attached, for a
+# human to resolve by hand. blocked / rate-limited-paused tickets are never
+# merged.
+#
 # Usage:
 #   ./run-agent.sh                 # run now, then loop forever (every 30 min)
 #   ./run-agent.sh --once          # a single run, then exit (for cron / testing)
 #   ./run-agent.sh -i 10           # loop with a custom interval (10 min here)
-#   ./run-agent.sh -t              # prompt for a ticket number and run ONLY
-#                                   # that ticket, ignoring priority, then exit
+#   ./run-agent.sh -t 99            # run ONLY TF-099, ignoring priority, then exit
+#   ./run-agent.sh -t                # same, but prompts for the ticket number
 #   ./run-agent.sh -h              # show this usage
 #
 # Run it persistently (it blocks the terminal), e.g.:
@@ -63,10 +74,11 @@ Usage: run-agent.sh [options]
   --once            Run a single session then exit (default: loop forever).
   -i, --interval N  Wait N minutes between runs (default: 30, or
                      TASKFLOW_INTERVAL env in seconds).
-  -t, --ticket      Prompt for a ticket number (e.g. 34 for TF-034) and run
-                     ONLY that ticket, ignoring priority order. Implies a
-                     single run (like --once) since it's an interactive
-                     one-off action, not part of the unattended loop.
+  -t, --ticket [ID] Run ONLY one ticket, ignoring priority order. Pass the
+                     number directly (e.g. `-t 34` for TF-034) to skip the
+                     prompt; with no number (`-t`), asks for it interactively.
+                     Either way implies a single run (like --once), since
+                     it's a one-off action, not part of the unattended loop.
   -h, --help        Show this help.
 EOF
 }
@@ -74,6 +86,7 @@ EOF
 ONCE=0
 TICKET_MODE=0
 CLI_INTERVAL_MIN=""
+CLI_TICKET_ID=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -87,7 +100,17 @@ while [ $# -gt 0 ]; do
             ;;
         -t|--ticket)
             TICKET_MODE=1
-            shift
+            # Optional inline id (e.g. `-t 99`) - only consume $2 if it looks
+            # like a whole number (including "0", so it hits the same clear
+            # "invalid ticket number" validation below rather than falling
+            # through to "unknown option"). `-t` alone (no numeric $2) instead
+            # shifts by 1 and the interactive prompt below picks it up.
+            if [ -n "${2:-}" ] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                CLI_TICKET_ID="$2"
+                shift 2
+            else
+                shift
+            fi
             ;;
         -h|--help)
             print_usage
@@ -110,15 +133,21 @@ if [ -n "$CLI_INTERVAL_MIN" ]; then
     INTERVAL=$((CLI_INTERVAL_MIN * 60))
 fi
 
-# --- Feature 2: -t prompts for a specific ticket to force-run --------------
+# --- Feature 2: -t runs a specific ticket, id inline or prompted -----------
 FORCED_TICKET_ID=""
 if [ "$TICKET_MODE" -eq 1 ]; then
-    read -rp "Enter ticket number (e.g. 34 for TF-034): " ticket_input
-    if ! [[ "$ticket_input" =~ ^[0-9]+$ ]] || [ "$ticket_input" -le 0 ]; then
-        echo "[run-agent] invalid ticket number '$ticket_input' - enter digits only, e.g. 34 for TF-034. Stopping." >&2
-        exit 1
+    if [ -n "$CLI_TICKET_ID" ]; then
+        # Id was given on the command line (`-t 99`) - use it, no prompt.
+        FORCED_TICKET_ID="$CLI_TICKET_ID"
+    else
+        # No id given (`-t` alone) - ask for it interactively.
+        read -rp "Enter ticket number (e.g. 34 for TF-034): " ticket_input
+        if ! [[ "$ticket_input" =~ ^[0-9]+$ ]] || [ "$ticket_input" -le 0 ]; then
+            echo "[run-agent] invalid ticket number '$ticket_input' - enter digits only, e.g. 34 for TF-034. Stopping." >&2
+            exit 1
+        fi
+        FORCED_TICKET_ID="$ticket_input"
     fi
-    FORCED_TICKET_ID="$ticket_input"
     ONCE=1   # a forced single-ticket run is a one-off action, not a loop.
 fi
 
@@ -203,16 +232,48 @@ git_checkpoint_commit() {
 }
 
 # Runs AFTER the checkpoint commit. A rate-limited run (75) expects to be
-# resumed, so leave the scratch branch checked out for next time. Otherwise
-# (completed or blocked - no more resuming) switch project_folder back to its
-# base branch so it's in normal state for whichever ticket runs there next.
+# resumed, so leave the scratch branch checked out for next time - no status
+# check needed, since a session that hit 75 never got to call
+# update_ticket_status at all. Otherwise, switch project_folder back to its
+# base branch, then - ONLY for a ticket whose DB status is actually
+# 'completed' - auto-merge the scratch branch into it. The exit code `code`
+# is deliberately NOT used to decide "did it complete": a session can exit 0
+# after already calling update_ticket_status('blocked') mid-session, or crash
+# non-zero while the ticket sits unreconciled at 'in-progress'. Only the DB
+# row (read fresh, after Claude's session has fully ended) is authoritative -
+# see getTicketState in mcp-server/db.js.
 git_checkpoint_finish() {
-    local dir="$1" code="$2" log="$3"
+    local dir="$1" task_id="$2" code="$3" log="$4"
     [ "$code" -eq 75 ] && return
     local base_branch
     base_branch="$(resolve_base_branch "$dir")"
-    if [ -n "$base_branch" ]; then
-        git -C "$dir" checkout -q "$base_branch" 2>>"$log"
+    [ -z "$base_branch" ] && return
+    git -C "$dir" checkout -q "$base_branch" 2>>"$log"
+
+    local scratch_branch="taskflow/ticket-$task_id"
+    local state ai_status
+    state="$(node "$PROJECT_DIR/mcp-server/get-ticket-status.js" "$task_id" 2>>"$log")"
+    ai_status="$(echo "$state" | jq -r '.ai_execution_status // empty' 2>/dev/null)"
+
+    if [ "$ai_status" != "completed" ]; then
+        echo "[run-agent] TF-$task_id final status is '${ai_status:-unknown}' (not completed); leaving $scratch_branch unmerged." | tee -a "$log"
+        return
+    fi
+
+    echo "[run-agent] TF-$task_id completed; auto-merging $scratch_branch into $base_branch…" | tee -a "$log"
+    if git -C "$dir" merge -q -m "Merge $scratch_branch into $base_branch (TF-$task_id)" "$scratch_branch" >>"$log" 2>&1; then
+        echo "[run-agent] merge clean: $scratch_branch -> $base_branch." | tee -a "$log"
+        node "$PROJECT_DIR/mcp-server/record-merge.js" "$task_id" "$scratch_branch" "$base_branch" 2>&1 | tee -a "$log"
+    else
+        local conflicts
+        conflicts="$(git -C "$dir" diff --name-only --diff-filter=U)"
+        git -C "$dir" merge --abort 2>>"$log"
+        echo "[run-agent] merge CONFLICT: $scratch_branch -> $base_branch; aborted, $base_branch left untouched. Conflicting files: ${conflicts:-(none captured)}" | tee -a "$log"
+        node "$PROJECT_DIR/mcp-server/block-ticket.js" "$task_id" \
+            "Auto-merge of $scratch_branch into $base_branch conflicted and was aborted (git merge --abort); $base_branch left untouched. Conflicting files:
+$conflicts" \
+            "post-run merge" \
+            2>&1 | tee -a "$log"
     fi
 }
 
@@ -345,9 +406,10 @@ $ticket_json"
     # Checkpoint whatever Claude left in the working tree - success, blocked,
     # or rate-limited, always, so no session's work is ever lost to a later
     # `git checkout --`/`rm -rf` - then, unless we expect to resume (75),
-    # return project_folder to its base branch. See git_checkpoint_* above.
+    # return project_folder to its base branch and auto-merge if (and only
+    # if) the ticket's DB status actually completed. See git_checkpoint_* above.
     git_checkpoint_commit "$project_folder" "$task_id" "$run_id" "$code" "$run_log"
-    git_checkpoint_finish "$project_folder" "$code" "$run_log"
+    git_checkpoint_finish "$project_folder" "$task_id" "$code" "$run_log"
 
     # Parse the stream-json log's terminal `result` event for token usage/cost
     # and update the `runs` row start-run.js created above (best-effort - see
