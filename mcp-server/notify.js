@@ -25,12 +25,54 @@ const EVENT_LABELS = {
   error: 'Error',
 };
 
+const EVENT_ICONS = {
+  created: '\u{1F195}',
+  'in-progress': '\u{25B6}\u{FE0F}',
+  completed: '\u{2705}',
+  blocked: '\u{26D4}',
+  'rate-limited-paused': '\u{23F8}\u{FE0F}',
+  error: '\u{26A0}\u{FE0F}',
+};
+
 function truthy(v) {
   return v === '1' || v === 1 || v === true || v === 'true';
 }
 
 function ticketKey(id) {
   return 'TF-' + String(id).padStart(3, '0');
+}
+
+function fmtInt(n) {
+  return Number(n).toLocaleString('en-US');
+}
+
+/**
+ * Render a task's cumulative token/cost usage (see the SUM(...) query in
+ * record-run.js's sendCompletionNotification) as a short block of lines, or
+ * [] when nothing usable was passed - most events have no usage attached, and
+ * a run whose stream-json log never produced a `result` event has all-null
+ * fields even when it does.
+ */
+function formatUsageLines(usage) {
+  if (!usage) return [];
+  const lines = [];
+  const hasIn = usage.input_tokens !== null && usage.input_tokens !== undefined;
+  const hasOut = usage.output_tokens !== null && usage.output_tokens !== undefined;
+  if (hasIn || hasOut) {
+    lines.push(`Tokens: ${fmtInt(usage.input_tokens || 0)} in / ${fmtInt(usage.output_tokens || 0)} out`);
+  }
+  const cacheCreate = Number(usage.cache_creation_tokens || 0);
+  const cacheRead = Number(usage.cache_read_tokens || 0);
+  if (cacheCreate || cacheRead) {
+    lines.push(`Cache: ${fmtInt(cacheCreate)} created / ${fmtInt(cacheRead)} read`);
+  }
+  if (usage.total_cost_usd !== null && usage.total_cost_usd !== undefined) {
+    lines.push(`Cost: $${Number(usage.total_cost_usd).toFixed(4)}`);
+  }
+  if (lines.length && usage.runs && Number(usage.runs) > 1) {
+    lines.push(`(across ${usage.runs} runs)`);
+  }
+  return lines;
 }
 
 async function loadSettings() {
@@ -53,7 +95,7 @@ async function loadTicket(taskId) {
   return rows[0] || null;
 }
 
-function buildPayload(ticket, event, settings, reason) {
+function buildPayload(ticket, event, settings, reason, usage) {
   const base = (settings.notify_app_base_url || '').trim().replace(/\/+$/, '');
   const link = base ? `${base}/project.php?id=${ticket.project_id}` : null;
   return {
@@ -68,18 +110,31 @@ function buildPayload(ticket, event, settings, reason) {
     },
     link,
     reason: reason || null,
+    usage: usage || null,
     timestamp: new Date().toISOString(),
   };
 }
 
 function messageText(ticket, event, payload) {
+  const icon = EVENT_ICONS[event];
   const lines = [
-    `TaskFlow ${ticketKey(ticket.id)} ${EVENT_LABELS[event] || event}`,
+    `${icon ? icon + ' ' : ''}TaskFlow ${ticketKey(ticket.id)} — ${EVENT_LABELS[event] || event}`,
     ticket.title,
     `Project: ${ticket.project_name}`,
   ];
-  if (payload.reason) lines.push(`Reason: ${payload.reason}`);
-  if (payload.link) lines.push(payload.link);
+  if (payload.reason) {
+    lines.push('');
+    lines.push(`Reason: ${payload.reason}`);
+  }
+  const usageLines = formatUsageLines(payload.usage);
+  if (usageLines.length) {
+    lines.push('');
+    lines.push(...usageLines);
+  }
+  if (payload.link) {
+    lines.push('');
+    lines.push(payload.link);
+  }
   return lines.join('\n');
 }
 
@@ -124,16 +179,21 @@ async function sendEmail(settings, subject, text) {
 /**
  * Fire every enabled notification channel for a ticket lifecycle event.
  * `reason` is an optional short human-readable cause (e.g. a DoD gate
- * failure or block reason) folded into the message/payload.
+ * failure or block reason) folded into the message/payload. `usage` is an
+ * optional { input_tokens, output_tokens, cache_creation_tokens,
+ * cache_read_tokens, total_cost_usd, runs? } breakdown - currently only
+ * passed for the 'completed' event, by record-run.js, once a run's actual
+ * token usage is known (see that file's header comment for why this can't
+ * be known at the time update_ticket_status itself fires the event).
  */
-export async function notifyTicketEvent(taskId, event, reason = null) {
+export async function notifyTicketEvent(taskId, event, reason = null, usage = null) {
   try {
     const [settings, ticket] = await Promise.all([loadSettings(), loadTicket(taskId)]);
     if (!ticket) return;
 
-    const payload = buildPayload(ticket, event, settings, reason);
+    const payload = buildPayload(ticket, event, settings, reason, usage);
     const text = messageText(ticket, event, payload);
-    const subject = `TaskFlow ${ticketKey(ticket.id)} ${EVENT_LABELS[event] || event}`;
+    const subject = `${EVENT_ICONS[event] ? EVENT_ICONS[event] + ' ' : ''}TaskFlow ${ticketKey(ticket.id)} ${EVENT_LABELS[event] || event}`;
 
     const deliveries = [];
     if (truthy(settings.notify_webhook_enabled) && settings.notify_webhook_url) {

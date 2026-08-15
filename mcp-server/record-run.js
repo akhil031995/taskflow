@@ -22,6 +22,34 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
 import { pool } from './db.js';
+import { notifyTicketEvent } from './notify.js';
+
+/**
+ * Send the 'completed' notification with this task's cumulative token/cost
+ * usage, once this run's row has been written to `runs`. Deferred here (see
+ * index.js's update_ticket_status, which skips it under run-agent.sh) since
+ * this is the earliest point a run's actual usage is known - and the
+ * earliest point a merge conflict in git_checkpoint_finish (which runs
+ * before this script, per run-agent.sh) would already have flipped the
+ * ticket to 'blocked', so checking ai_execution_status here reflects the
+ * true final state instead of the optimistic mid-session one.
+ * Sums across every run row for the task (not just this one) since a ticket
+ * can span multiple resumed sessions after a rate-limit pause.
+ * Best-effort: never throws past its caller.
+ */
+async function sendCompletionNotification(taskId) {
+  const [[task]] = await pool.query('SELECT ai_execution_status FROM tasks WHERE id = ?', [taskId]);
+  if (!task || task.ai_execution_status !== 'completed') return;
+
+  const [[totals]] = await pool.query(
+    `SELECT COUNT(*) AS runs, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+            SUM(cache_creation_tokens) AS cache_creation_tokens, SUM(cache_read_tokens) AS cache_read_tokens,
+            SUM(total_cost_usd) AS total_cost_usd
+       FROM runs WHERE task_id = ?`,
+    [taskId]
+  );
+  await notifyTicketEvent(taskId, 'completed', null, totals);
+}
 
 async function main() {
   const [, , runIdArg, taskIdArg, projectIdArg, runLogPath, exitCodeArg, startedAtArg] = process.argv;
@@ -120,6 +148,14 @@ async function main() {
         `${usage.input_tokens ?? 0} in / ${usage.output_tokens ?? 0} out tokens, outcome=${outcome}`
       : `[record-run] no result event found in ${runLogPath}; recorded run ${runId ?? '(new)'} with null usage/cost, outcome=${outcome}.`
   );
+
+  if (taskId) {
+    try {
+      await sendCompletionNotification(taskId);
+    } catch (err) {
+      console.error(`[record-run] failed to send completion notification for task ${taskId}:`, err.message);
+    }
+  }
 }
 
 main()

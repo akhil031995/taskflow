@@ -120,7 +120,17 @@ registerTool(
       [status, kanban, task_id]
     );
     if (res.affectedRows === 0) throw new Error(`No ticket with id ${task_id}`);
-    await notifyTicketEvent(task_id, status);
+    // Under run-agent.sh (TASKFLOW_RUN_ID set, inherited from the launching
+    // shell - see db.js's finalizeClaim comment), record-run.js sends the
+    // 'completed' notification itself once the session ends, enriched with
+    // this run's actual token usage/cost (unknowable here, mid-session) and
+    // after git_checkpoint_finish has confirmed the auto-merge didn't
+    // conflict. Sending it here too would just duplicate it early and
+    // token-less. Manual/standalone sessions (no run-agent.sh, so no
+    // record-run.js call coming) still get this best-effort notification.
+    if (!(status === 'completed' && process.env.TASKFLOW_RUN_ID)) {
+      await notifyTicketEvent(task_id, status);
+    }
     return { id: task_id, ai_execution_status: status, status: kanban };
   }
 );
