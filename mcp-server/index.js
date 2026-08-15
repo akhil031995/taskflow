@@ -18,6 +18,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { pool, logInvocation, sessionLog, claimHighestPriorityTicket } from './db.js';
 import { getEffectiveAcceptanceCriteria, getProjectDodGates, runDodGates } from './dod-gates.js';
+import { notifyTicketEvent } from './notify.js';
 
 const server = new McpServer({ name: 'taskflow-mcp-server', version: '1.0.0' });
 
@@ -119,6 +120,7 @@ registerTool(
       [status, kanban, task_id]
     );
     if (res.affectedRows === 0) throw new Error(`No ticket with id ${task_id}`);
+    await notifyTicketEvent(task_id, status);
     return { id: task_id, ai_execution_status: status, status: kanban };
   }
 );
@@ -156,6 +158,7 @@ async function enforceDodGates(task_id) {
   );
   if (res.affectedRows === 0) throw new Error(`No ticket with id ${task_id}`);
   await sessionLog(task_id, 'status', 'DoD gates failed -> blocked (see comments for captured output).');
+  await notifyTicketEvent(task_id, 'blocked', 'Definition-of-Done gates failed.');
   return { id: task_id, ai_execution_status: 'blocked', status: 'on_hold', gates_passed: false, gate_report: report };
 }
 

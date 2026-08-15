@@ -104,6 +104,109 @@ require __DIR__ . '/includes/header.php';
         <textarea data-setting="org_standards_baseline" rows="6"
             class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs leading-relaxed"><?= e($val('org_standards_baseline')) ?></textarea>
     </section>
+
+    <!-- Notifications -->
+    <section class="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5 mb-5">
+        <h2 class="font-semibold mb-1 flex items-center gap-2">🔔 Notifications</h2>
+        <p class="text-xs text-slate-500 mb-4">
+            Fired when a ticket reaches <code>completed</code>, <code>blocked</code>, or <code>rate-limited-paused</code>,
+            so a human is pulled in when the agent needs one. Each channel is independent and can be switched off; a
+            delivery failure on one channel never blocks the others or the ticket update itself.
+        </p>
+
+        <div class="mb-5 pb-5 border-b border-slate-100 dark:border-slate-800">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-medium">Webhook</h3>
+                <select data-setting="notify_webhook_enabled" class="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent dark:bg-slate-900 text-xs">
+                    <option value="1" <?= $val('notify_webhook_enabled', '0') === '1' ? 'selected' : '' ?>>Enabled</option>
+                    <option value="0" <?= $val('notify_webhook_enabled', '0') === '0' ? 'selected' : '' ?>>Disabled</option>
+                </select>
+            </div>
+            <label class="text-sm block">
+                <span class="text-slate-500 dark:text-slate-400">Webhook URL</span>
+                <input data-setting="notify_webhook_url" type="text" placeholder="https://example.com/hooks/taskflow" value="<?= e($val('notify_webhook_url')) ?>"
+                    class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
+                <span class="text-[11px] text-slate-500">Receives a JSON POST: <code>{ event, ticket: { id, key, title, status, project }, link, reason, timestamp }</code>.</span>
+            </label>
+        </div>
+
+        <div class="mb-5 pb-5 border-b border-slate-100 dark:border-slate-800">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-medium">Telegram</h3>
+                <select data-setting="notify_telegram_enabled" class="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent dark:bg-slate-900 text-xs">
+                    <option value="1" <?= $val('notify_telegram_enabled', '0') === '1' ? 'selected' : '' ?>>Enabled</option>
+                    <option value="0" <?= $val('notify_telegram_enabled', '0') === '0' ? 'selected' : '' ?>>Disabled</option>
+                </select>
+            </div>
+            <div class="grid sm:grid-cols-2 gap-3">
+                <label class="text-sm">
+                    <span class="text-slate-500 dark:text-slate-400">Bot token</span>
+                    <input data-setting="notify_telegram_bot_token" type="password" value="<?= e($val('notify_telegram_bot_token')) ?>"
+                        class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
+                </label>
+                <label class="text-sm">
+                    <span class="text-slate-500 dark:text-slate-400">Chat ID</span>
+                    <input data-setting="notify_telegram_chat_id" type="text" value="<?= e($val('notify_telegram_chat_id')) ?>"
+                        class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
+                </label>
+            </div>
+        </div>
+
+        <div class="mb-5 pb-5 border-b border-slate-100 dark:border-slate-800">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-medium">Email (SMTP)</h3>
+                <select data-setting="notify_email_enabled" class="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent dark:bg-slate-900 text-xs">
+                    <option value="1" <?= $val('notify_email_enabled', '0') === '1' ? 'selected' : '' ?>>Enabled</option>
+                    <option value="0" <?= $val('notify_email_enabled', '0') === '0' ? 'selected' : '' ?>>Disabled</option>
+                </select>
+            </div>
+            <div class="grid sm:grid-cols-2 gap-3">
+                <label class="text-sm">
+                    <span class="text-slate-500 dark:text-slate-400">SMTP host</span>
+                    <input data-setting="notify_email_smtp_host" type="text" value="<?= e($val('notify_email_smtp_host')) ?>"
+                        class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
+                </label>
+                <label class="text-sm">
+                    <span class="text-slate-500 dark:text-slate-400">SMTP port</span>
+                    <input data-setting="notify_email_smtp_port" type="number" min="1" value="<?= e($val('notify_email_smtp_port', '587')) ?>"
+                        class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
+                </label>
+                <label class="text-sm">
+                    <span class="text-slate-500 dark:text-slate-400">SMTP user</span>
+                    <input data-setting="notify_email_smtp_user" type="text" value="<?= e($val('notify_email_smtp_user')) ?>"
+                        class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
+                </label>
+                <label class="text-sm">
+                    <span class="text-slate-500 dark:text-slate-400">SMTP password</span>
+                    <input data-setting="notify_email_smtp_pass" type="password" value="<?= e($val('notify_email_smtp_pass')) ?>"
+                        class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
+                </label>
+                <label class="text-sm">
+                    <span class="text-slate-500 dark:text-slate-400">Use TLS (implicit)</span>
+                    <select data-setting="notify_email_smtp_secure" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent dark:bg-slate-900">
+                        <option value="0" <?= $val('notify_email_smtp_secure', '0') === '0' ? 'selected' : '' ?>>No (STARTTLS on 587)</option>
+                        <option value="1" <?= $val('notify_email_smtp_secure', '0') === '1' ? 'selected' : '' ?>>Yes (port 465)</option>
+                    </select>
+                </label>
+                <label class="text-sm">
+                    <span class="text-slate-500 dark:text-slate-400">From address</span>
+                    <input data-setting="notify_email_from" type="text" placeholder="taskflow@example.com" value="<?= e($val('notify_email_from')) ?>"
+                        class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
+                </label>
+                <label class="text-sm sm:col-span-2">
+                    <span class="text-slate-500 dark:text-slate-400">Notify address(es) (comma-separated)</span>
+                    <input data-setting="notify_email_to" type="text" value="<?= e($val('notify_email_to')) ?>"
+                        class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
+                </label>
+            </div>
+        </div>
+
+        <label class="text-sm block">
+            <span class="text-slate-500 dark:text-slate-400">TaskFlow URL (used to build the ticket link in notifications)</span>
+            <input data-setting="notify_app_base_url" type="text" placeholder="https://taskflowdev.littlebitofeverything.in" value="<?= e($val('notify_app_base_url')) ?>"
+                class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-mono text-xs">
+        </label>
+    </section>
 </div>
 
 <script>

@@ -277,6 +277,20 @@ function settings_save(): array
         'agent_operating_rules',
         'host_projects_root',
         'org_standards_baseline',
+        'notify_webhook_enabled',
+        'notify_webhook_url',
+        'notify_telegram_enabled',
+        'notify_telegram_bot_token',
+        'notify_telegram_chat_id',
+        'notify_email_enabled',
+        'notify_email_smtp_host',
+        'notify_email_smtp_port',
+        'notify_email_smtp_user',
+        'notify_email_smtp_pass',
+        'notify_email_smtp_secure',
+        'notify_email_from',
+        'notify_email_to',
+        'notify_app_base_url',
     ];
 
     $saved = 0;

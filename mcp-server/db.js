@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { resolveEffectiveStandards, writeResolvedStandards } from './standards.js';
+import { notifyTicketEvent } from './notify.js';
 
 // Load THIS directory's .env, not the caller's cwd. run-agent.sh cd's into the
 // CLAIMED TICKET's project_folder (which varies per run - any registered
@@ -293,6 +294,7 @@ export async function markTicketBlocked(taskId, reason, stage = 'pre-flight') {
   );
   if (res.affectedRows === 0) throw new Error(`No ticket with id ${taskId}`);
   await sessionLog(taskId, 'status', `Blocked by harness (${stage}): ${reason}`);
+  await notifyTicketEvent(taskId, 'blocked', reason);
 }
 
 /**
