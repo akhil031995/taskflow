@@ -10,9 +10,10 @@
   },
   "scripts": {
     "start": "node index.js",
-    "check": "node --check index.js && node --check repomap-server.js && node --check repomap-index.js",
+    "check": "node --check index.js && node --check repomap-server.js && node --check repomap-index.js && node --check token-report.js",
     "bootstrap-standards": "node bootstrap-standards.js",
-    "repomap:start": "node repomap-server.js"
+    "repomap:start": "node repomap-server.js",
+    "token-report": "node token-report.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.7.0",
