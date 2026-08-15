@@ -23,6 +23,7 @@
  * run-agent.sh calls this at the start of every iteration.
  */
 import { pool, sessionLog, markTicketBlocked } from './db.js';
+import { notifyTicketEvent } from './notify.js';
 
 const RESUME_ATTEMPT_LIMIT = Number(process.env.RESUME_ATTEMPT_LIMIT) || 3;
 
@@ -45,9 +46,9 @@ async function main() {
       continue;
     }
 
-    const note = `\n[${new Date().toISOString()}] Session ended without reporting status ` +
-      `(likely token/rate limit or crash); auto-marked rate-limited-paused for resume ` +
-      `(attempt ${attempts}/${RESUME_ATTEMPT_LIMIT}).`;
+    const reason = `Session ended without reporting status (likely token/rate limit or crash); ` +
+      `auto-marked rate-limited-paused for resume (attempt ${attempts}/${RESUME_ATTEMPT_LIMIT}).`;
+    const note = `\n[${new Date().toISOString()}] ${reason}`;
     await pool.query(
       `UPDATE tasks
           SET ai_execution_status = 'rate-limited-paused',
@@ -57,6 +58,11 @@ async function main() {
       [note, t.id]
     );
     await sessionLog(t.id, 'status', `Orphaned session reconciled → rate-limited-paused (attempt ${attempts}/${RESUME_ATTEMPT_LIMIT}; will resume next run).`);
+    // This is an unreported crash, not the agent's own voluntary
+    // update_ticket_status('rate-limited-paused') call (which already
+    // notifies from index.js) - flag it distinctly as an error so a human
+    // can tell "hit the rate limit normally" apart from "session died".
+    await notifyTicketEvent(t.id, 'error', reason);
     console.error(`[reconcile] TF-${String(t.id).padStart(3, '0')} "${t.title}": in-progress → rate-limited-paused (${attempts}/${RESUME_ATTEMPT_LIMIT})`);
   }
 

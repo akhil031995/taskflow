@@ -208,6 +208,7 @@ registerTool(
        VALUES (?, ?, ?, 'pending', ?, 0, ?, ?, 'ai', 'pending')`,
       [project_id, title, description, priority, task_type, criteria]
     );
+    await notifyTicketEvent(res.insertId, 'created');
     return { id: res.insertId, created_by: 'ai', ai_execution_status: 'pending' };
   }
 );

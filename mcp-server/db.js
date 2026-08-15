@@ -161,6 +161,7 @@ async function finalizeClaim(conn, ticket, resuming) {
       `${ticket.project_folder || '(not set)'}.` +
       (ticket.standards_file ? ` Standards file: ${ticket.standards_file}.` : ' No standards file found.')
   );
+  await notifyTicketEvent(ticket.id, 'in-progress', resuming ? 'Resumed after rate-limited pause.' : null);
   return ticket;
 }
 

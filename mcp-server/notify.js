@@ -1,23 +1,28 @@
 // Best-effort outbound notifications (generic webhook, Telegram, email) fired
-// when a ticket reaches completed / blocked / rate-limited-paused, so a human
-// is pulled in without polling the board. Settings live in the same `settings`
-// key/value table as the rest of the control plane (see src/settings.php's
-// Notifications section + api.php's settings_save allow-list), each channel
-// independently toggled.
+// on every ticket lifecycle transition a human should know about without
+// polling the board: created, in-progress (claimed/resumed), completed,
+// blocked, rate-limited-paused, and error (session died without reporting a
+// status). Settings live in the same `settings` key/value table as the rest
+// of the control plane (see src/settings.php's Notifications section +
+// api.php's settings_save allow-list), each channel independently toggled.
 //
 // Every channel is wrapped so a delivery failure only logs to stderr - it must
 // never surface as a tool error or block the status update that triggered it
-// (update_ticket_status, the DoD-gate auto-block path, and markTicketBlocked
-// all call notifyTicketEvent and ignore its outcome).
+// (update_ticket_status, the DoD-gate auto-block path, finalizeClaim,
+// create_ticket, reconcile.js, and markTicketBlocked all call
+// notifyTicketEvent and ignore its outcome).
 import nodemailer from 'nodemailer';
 import { pool } from './db.js';
 
 const DELIVERY_TIMEOUT_MS = 10_000;
 
 const EVENT_LABELS = {
+  created: 'Created',
+  'in-progress': 'In Progress',
   completed: 'Completed',
   blocked: 'Blocked',
   'rate-limited-paused': 'Rate-limited (paused)',
+  error: 'Error',
 };
 
 function truthy(v) {
