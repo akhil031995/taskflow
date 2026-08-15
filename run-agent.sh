@@ -264,6 +264,15 @@ git_checkpoint_finish() {
     if git -C "$dir" merge -q -m "Merge $scratch_branch into $base_branch (TF-$task_id)" "$scratch_branch" >>"$log" 2>&1; then
         echo "[run-agent] merge clean: $scratch_branch -> $base_branch." | tee -a "$log"
         node "$PROJECT_DIR/mcp-server/record-merge.js" "$task_id" "$scratch_branch" "$base_branch" 2>&1 | tee -a "$log"
+        # -d (safe delete): only removes the branch if its commits are fully
+        # reachable from HEAD, which they are right after a successful merge.
+        # Never deletes on the conflict path below - that branch is exactly
+        # what the human needs to inspect to resolve it by hand.
+        if git -C "$dir" branch -d "$scratch_branch" >>"$log" 2>&1; then
+            echo "[run-agent] deleted merged branch $scratch_branch." | tee -a "$log"
+        else
+            echo "[run-agent] could not delete $scratch_branch after merge (non-fatal; branch left for inspection)." | tee -a "$log"
+        fi
     else
         local conflicts
         conflicts="$(git -C "$dir" diff --name-only --diff-filter=U)"
