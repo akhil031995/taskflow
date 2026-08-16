@@ -78,7 +78,9 @@ registerTool(
   'Return the highest-priority pending ticket and atomically lock it ' +
     '(ai_execution_status = in-progress, ai_locked_at = NOW()). Ordered by ' +
     'priority ASC (1 High before 3 Low), then id ASC. Includes standards_file ' +
-    '(the claimed project\'s CLAUDE.md/STANDARDS.md path, or null). Returns {} when none. ' +
+    '(the claimed project\'s CLAUDE.md/STANDARDS.md path, or null) and human_comments ' +
+    '(reviewer comments left in the detail-modal UI, as [{author, text, created_at}], ' +
+    'oldest first - read these for guidance before implementing). Returns {} when none. ' +
     'NOTE: run-agent.sh claims the ticket itself (via claim-ticket.js) before starting ' +
     'this session so it can cd into project_folder first; do not call this tool if the ' +
     'run prompt already handed you a claimed ticket.',

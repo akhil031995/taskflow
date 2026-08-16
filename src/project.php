@@ -281,7 +281,19 @@ require __DIR__ . '/includes/header.php';
         <!-- Body: comments (left) | details + status + requirements (right) -->
         <div class="flex-1 overflow-y-auto grid md:grid-cols-2 gap-0 md:divide-x divide-slate-200 dark:divide-slate-800">
             <div class="p-6 overflow-y-auto">
-                <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">💬 Comments &amp; Activity</h3>
+                <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">💬 Comments</h3>
+                <div class="space-y-2 mb-4">
+                    <input id="dm-comment-author" type="text" placeholder="Your name"
+                        class="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent text-sm">
+                    <textarea id="dm-comment-text" rows="2" placeholder="Leave a comment - the agent reads this on its next run…"
+                        class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent text-sm"></textarea>
+                    <div class="flex justify-end">
+                        <button id="dm-comment-add" class="px-3 py-1.5 rounded-lg text-sm bg-indigo-600 text-white hover:bg-indigo-700">Add comment</button>
+                    </div>
+                </div>
+                <ol id="dm-human-comments" class="space-y-3 mb-5"></ol>
+
+                <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">🤖 Agent Activity</h3>
                 <ol id="dm-comments" class="space-y-3"></ol>
             </div>
             <div class="p-6 overflow-y-auto space-y-5">

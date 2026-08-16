@@ -42,6 +42,7 @@ try {
         case 'task.delete':  json_response(task_delete());  break;
         case 'task.criteria': json_response(task_criteria()); break;
         case 'task.get':     json_response(task_get());     break;
+        case 'task.comment.create': json_response(task_comment_create()); break;
 
         // ---- Notes -------------------------------------------------------
         case 'note.create':  json_response(note_create());  break;
@@ -232,6 +233,7 @@ function task_get(): array
         'priority_class' => PRIORITY_PILL_CLASSES[$pk] ?? '',
         'type_label'     => ucwords(str_replace('-', ' ', $t['task_type'] ?? 'feature')),
         'comments'       => parse_ai_comments($t['ai_comments'] ?? ''),
+        'human_comments' => get_human_comments($id),
         'criteria'       => parse_acceptance_criteria($t['acceptance_criteria'] ?? ''),
         'project'        => $p ? [
             'id'          => (int) $p['id'],
@@ -241,6 +243,26 @@ function task_get(): array
             'access_url'  => $p['access_url'],
         ] : null,
     ];
+}
+
+/** Add a human comment to a ticket (detail-modal composer); the agent reads these on its next run. */
+function task_comment_create(): array
+{
+    $in   = json_input();
+    $id   = (int) ($in['id'] ?? 0);
+    $text = trim((string) ($in['comment_text'] ?? ''));
+    if ($id <= 0) {
+        json_response(['ok' => false, 'error' => 'id is required'], 422);
+    }
+    if ($text === '') {
+        json_response(['ok' => false, 'error' => 'comment_text is required'], 422);
+    }
+    $author = trim((string) ($in['author'] ?? '')) ?: 'Reviewer';
+
+    $stmt = db()->prepare('INSERT INTO task_comments (task_id, author, comment_text) VALUES (?, ?, ?)');
+    $stmt->execute([$id, $author, $text]);
+
+    return ['ok' => true, 'comments' => get_human_comments($id)];
 }
 
 /** Persist an acceptance-criteria checklist edit from the card. */

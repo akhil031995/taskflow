@@ -105,6 +105,21 @@ export function findStandardsFile(projectFolder) {
 }
 
 /**
+ * Human comments left on a ticket (reviewer name + free text, oldest first) -
+ * the other half of the two-way conversation from add_ticket_comment, which
+ * only ever appends to the agent's own ai_comments log. Handed to the agent
+ * inline in the claimed-ticket payload so guidance left between runs is
+ * actually read, not just visible in the UI.
+ */
+export async function getHumanComments(taskId) {
+  const [rows] = await pool.query(
+    `SELECT author, comment_text, created_at FROM task_comments WHERE task_id = ? ORDER BY id ASC`,
+    [taskId]
+  );
+  return rows.map((r) => ({ author: r.author, text: r.comment_text, created_at: r.created_at }));
+}
+
+/**
  * Finish claiming a ticket row already SELECTed ... FOR UPDATE inside `conn`'s
  * open transaction: lock it, move the card to In Progress, resolve/write
  * standards, log the session start, and commit. Shared by
@@ -127,6 +142,7 @@ async function finalizeClaim(conn, ticket, resuming) {
   );
   await conn.commit();
   ticket.standards_file = findStandardsFile(ticket.project_folder);
+  ticket.human_comments = await getHumanComments(ticket.id);
 
   // Resolve the layered standards (org baseline + this project's override)
   // and write them into the project's CLAUDE.md as a managed block, so the

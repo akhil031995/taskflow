@@ -150,6 +150,7 @@ cards.
 | `tasks`       | Kanban cards (status, priority, position, FK → projects)   |
 | `notes`       | Rich-text note tabs (Quill HTML, FK → projects)            |
 | `quick_links` | Global navbar bookmarks                                    |
+| `task_comments` | Human comments on a ticket (author, text, timestamp), FK → tasks. The agent reads these on its next claim; see `human_comments` in the MCP server docs. |
 
 `tasks` and `notes` cascade-delete with their project.
 

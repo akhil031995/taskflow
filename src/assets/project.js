@@ -282,6 +282,10 @@ async function openDetailModal(id) {
             li.appendChild(head); li.appendChild(body); cm.appendChild(li);
         });
 
+        // Human comments (right above the agent log)
+        renderHumanComments(r.human_comments || []);
+        document.getElementById('dm-comment-author').value = localStorage.getItem('tf-comment-author') || '';
+
         // Workspace
         const ws = document.getElementById('dm-workspace');
         ws.innerHTML = '';
@@ -296,6 +300,38 @@ async function openDetailModal(id) {
         toast(err.message, 'error');
     }
 }
+
+function renderHumanComments(comments) {
+    const hc = document.getElementById('dm-human-comments');
+    hc.innerHTML = '';
+    if (comments.length === 0) { hc.innerHTML = '<li class="text-slate-500 text-sm">No comments yet.</li>'; return; }
+    comments.forEach((c) => {
+        const li = document.createElement('li');
+        li.className = 'rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 p-3';
+        const head = document.createElement('p'); head.className = 'text-[11px] font-mono text-slate-400 mb-1';
+        head.textContent = `${c.author} · ${c.datetime || c.time || ''}`;
+        const body = document.createElement('p'); body.className = 'text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap'; body.textContent = c.text;
+        li.appendChild(head); li.appendChild(body); hc.appendChild(li);
+    });
+}
+
+document.getElementById('dm-comment-add').addEventListener('click', async () => {
+    if (!detailTask) return;
+    const authorEl = document.getElementById('dm-comment-author');
+    const textEl = document.getElementById('dm-comment-text');
+    const author = authorEl.value.trim();
+    const comment_text = textEl.value.trim();
+    if (!comment_text) return toast('Comment text required', 'error');
+    try {
+        const r = await api('task.comment.create', { id: detailTask.id, author, comment_text });
+        renderHumanComments(r.comments);
+        textEl.value = '';
+        if (author) localStorage.setItem('tf-comment-author', author);
+        toast('Comment added', 'success');
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+});
 
 function closeDetailModal() { detailModal.classList.add('hidden'); }
 document.getElementById('dm-close').addEventListener('click', closeDetailModal);

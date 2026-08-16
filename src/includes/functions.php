@@ -186,6 +186,31 @@ function get_task(int $id): ?array
     return $row ?: null;
 }
 
+/**
+ * Human comments on a ticket (detail-modal composer), oldest first - the
+ * reviewer side of the conversation. Distinct from ai_comments, which is an
+ * append-only text log the agent itself writes.
+ * @return array<int,array{author:string,text:string,time:string,datetime:string}>
+ */
+function get_human_comments(int $taskId): array
+{
+    $stmt = db()->prepare(
+        'SELECT author, comment_text, created_at FROM task_comments WHERE task_id = ? ORDER BY id ASC'
+    );
+    $stmt->execute([$taskId]);
+    $out = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $ts = strtotime((string) $row['created_at']);
+        $out[] = [
+            'author'   => $row['author'],
+            'text'     => $row['comment_text'],
+            'time'     => $ts ? date('H:i', $ts) : '',
+            'datetime' => $ts ? date('Y-m-d H:i:s', $ts) : '',
+        ];
+    }
+    return $out;
+}
+
 /** True when a task is currently locked by an AI agent run. */
 function task_is_ai_locked(array $task): bool
 {
