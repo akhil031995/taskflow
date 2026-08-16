@@ -104,6 +104,41 @@ export function findStandardsFile(projectFolder) {
   return null;
 }
 
+// Resume context stays roughly constant-size no matter how many times a
+// ticket has paused: keep the newest entries verbatim (each capped) and fold
+// everything older into a one-line count, instead of handing back the
+// ever-growing raw ai_comments log.
+const RESUME_SUMMARY_MAX_ENTRIES = 5;
+const RESUME_SUMMARY_ENTRY_MAX_CHARS = 220;
+
+/**
+ * Condense a ticket's ai_comments log (format: one "[ISO-8601] text" entry
+ * per line, see add_ticket_comment / parse_ai_comments in functions.php) into
+ * a short "state so far" for a resumed session. Returns null when there is
+ * no prior log to summarize.
+ */
+export function summarizeResumeState(raw) {
+  const entries = String(raw || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (entries.length === 0) return null;
+
+  const truncate = (s) =>
+    s.length > RESUME_SUMMARY_ENTRY_MAX_CHARS
+      ? `${s.slice(0, RESUME_SUMMARY_ENTRY_MAX_CHARS)}…`
+      : s;
+
+  const recent = entries.slice(-RESUME_SUMMARY_MAX_ENTRIES).map(truncate);
+  const omitted = entries.length - recent.length;
+  const lines = [];
+  if (omitted > 0) {
+    lines.push(`(+${omitted} earlier log entr${omitted === 1 ? 'y' : 'ies'} omitted)`);
+  }
+  lines.push(...recent);
+  return lines.join('\n');
+}
+
 /**
  * Finish claiming a ticket row already SELECTed ... FOR UPDATE inside `conn`'s
  * open transaction: lock it, move the card to In Progress, resolve/write
@@ -127,6 +162,17 @@ async function finalizeClaim(conn, ticket, resuming) {
   );
   await conn.commit();
   ticket.standards_file = findStandardsFile(ticket.project_folder);
+
+  // Compact resume context: fold prior ai_comments into a short "state so
+  // far" instead of handing back the raw, ever-growing log (which the agent
+  // otherwise had no way to read at all - add_ticket_comment is write-only).
+  // A fresh claim has no prior state to summarize, and the raw column is
+  // never part of the ticket JSON handed to the agent either way.
+  if (resuming) {
+    const summary = summarizeResumeState(ticket.ai_comments);
+    if (summary) ticket.resume_summary = summary;
+  }
+  delete ticket.ai_comments;
 
   // Resolve the layered standards (org baseline + this project's override)
   // and write them into the project's CLAUDE.md as a managed block, so the
@@ -159,7 +205,8 @@ async function finalizeClaim(conn, ticket, resuming) {
     'thought',
     `${resuming ? 'Resumed' : 'Claimed'} ${ticket.title}. Working directory: ` +
       `${ticket.project_folder || '(not set)'}.` +
-      (ticket.standards_file ? ` Standards file: ${ticket.standards_file}.` : ' No standards file found.')
+      (ticket.standards_file ? ` Standards file: ${ticket.standards_file}.` : ' No standards file found.') +
+      (ticket.resume_summary ? `\nResume summary:\n${ticket.resume_summary}` : '')
   );
   await notifyTicketEvent(ticket.id, 'in-progress', resuming ? 'Resumed after rate-limited pause.' : null);
   return ticket;
@@ -185,7 +232,7 @@ export async function claimHighestPriorityTicket() {
     // Paused tickets are resumed first, then highest priority, then oldest.
     const [rows] = await conn.query(
       `SELECT t.id, t.title, t.description, t.acceptance_criteria, t.task_type,
-              t.project_id, t.priority, t.ai_execution_status,
+              t.project_id, t.priority, t.ai_execution_status, t.ai_comments,
               p.name AS project_name, p.folder_path AS project_folder,
               p.access_url AS project_url
          FROM tasks t
@@ -238,7 +285,7 @@ export async function claimTicketById(id) {
     await conn.beginTransaction();
     const [rows] = await conn.query(
       `SELECT t.id, t.title, t.description, t.acceptance_criteria, t.task_type,
-              t.project_id, t.priority, t.status, t.ai_execution_status,
+              t.project_id, t.priority, t.status, t.ai_execution_status, t.ai_comments,
               p.name AS project_name, p.folder_path AS project_folder,
               p.access_url AS project_url
          FROM tasks t
