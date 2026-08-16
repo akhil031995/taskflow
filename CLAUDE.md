@@ -18,6 +18,13 @@ implementing one ticket per run. Keep this file lean - it is cached across runs.
   Open only the specific files/line-ranges those tools point to.
 - Read the narrowest slice that lets you make the change (a function, not a file;
   a file, not a folder).
+- **No blind-scan fallback.** `taskflow-repomap` results *replace* exploratory
+  `Read`/`Glob`/`Grep`, not supplement them - don't run repomap tools and then
+  also go read around the area "to be sure." If a query returns nothing, narrow
+  or rephrase it (or try `search_symbols` vs `search_code`) rather than falling
+  back to opening files/directories to scan by eye. `Read` is for opening the
+  exact file/line-range a repomap result already pointed to, or a file the
+  ticket names directly - not for open-ended exploration.
 
 ## Modifications (local only)
 
