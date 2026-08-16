@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { resolveEffectiveStandards, writeResolvedStandards } from './standards.js';
+import { getOrRefreshPrimer, writePrimerBlock } from './project-primer.js';
 import { notifyTicketEvent } from './notify.js';
 
 // Load THIS directory's .env, not the caller's cwd. run-agent.sh cd's into the
@@ -161,6 +162,24 @@ async function finalizeClaim(conn, ticket, resuming) {
       }
     } catch (err) {
       console.error('[taskflow-mcp] standards resolution failed:', err.message);
+    }
+
+    // Cached per-project primer (structure/entry points/key files), only
+    // regenerated when the file tree actually changed since the last claim
+    // (see computeFingerprint in project-primer.js) - then written into the
+    // same CLAUDE.md as a second managed block, so it's auto-loaded context
+    // right alongside the standards block above.
+    try {
+      const primerMd = await getOrRefreshPrimer(pool, {
+        projectId: ticket.project_id,
+        projectFolder: ticket.project_folder,
+        projectName: ticket.project_name,
+      });
+      if (primerMd) {
+        ticket.standards_file = writePrimerBlock(ticket.project_folder, ticket.standards_file, primerMd);
+      }
+    } catch (err) {
+      console.error('[taskflow-mcp] project primer generation failed:', err.message);
     }
   }
 

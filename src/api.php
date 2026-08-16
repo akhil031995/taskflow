@@ -66,6 +66,9 @@ try {
         case 'project.dod.get':  json_response(project_dod_get());  break;
         case 'project.dod.save': json_response(project_dod_save()); break;
 
+        // ---- Cached project primer (structure/entry points/key files) ----
+        case 'project.primer.get': json_response(project_primer_get()); break;
+
         // ---- Control plane -----------------------------------------------
         case 'settings.save':          json_response(settings_save());          break;
         case 'settings.test.telegram': json_response(settings_test_telegram()); break;
@@ -774,6 +777,26 @@ function project_dod_save(): array
     }
     set_project_dod_gates($id, $in);
     return ['ok' => true] + get_project_dod_gates($id);
+}
+
+// ===================================================================
+// Project primer handler (auto-generated + cached by
+// mcp-server/project-primer.js at ticket-claim time; read-only here).
+// ===================================================================
+
+/** Return a project's cached primer, or a null primer_md if none generated yet. */
+function project_primer_get(): array
+{
+    $id = (int) (json_input()['project_id'] ?? 0);
+    if ($id <= 0 || !get_project($id)) {
+        json_response(['ok' => false, 'error' => 'valid project_id is required'], 422);
+    }
+    $primer = get_project_primer($id);
+    return [
+        'ok'         => true,
+        'primer_md'  => $primer['primer_md'] ?? null,
+        'updated_at' => $primer['updated_at'] ?? null,
+    ];
 }
 
 // ===================================================================

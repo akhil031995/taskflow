@@ -6,8 +6,7 @@
 // Mirrors resolve_effective_standards() in src/includes/functions.php - kept
 // as a small standalone module (not shared code, since PHP and Node don't
 // share a runtime) so both sides produce the same shape of document.
-import fs from 'node:fs';
-import { join } from 'node:path';
+import { writeManagedBlock } from './managed-block.js';
 
 const BEGIN_MARKER = '<!-- taskflow:standards:begin (auto-generated, edit via the project\'s Standards tab, not by hand) -->';
 const END_MARKER = '<!-- taskflow:standards:end -->';
@@ -39,29 +38,5 @@ export async function resolveEffectiveStandards(pool, projectId) {
  * nothing to write (empty effective standards and no file to update).
  */
 export function writeResolvedStandards(projectFolder, existingStandardsFile, effectiveMd) {
-  if (!projectFolder) return existingStandardsFile;
-
-  const target = existingStandardsFile || join(projectFolder, 'CLAUDE.md');
-  const block = `${BEGIN_MARKER}\n${effectiveMd}\n${END_MARKER}`;
-
-  let current = '';
-  if (fs.existsSync(target)) {
-    current = fs.readFileSync(target, 'utf8');
-  }
-
-  const beginIdx = current.indexOf(BEGIN_MARKER);
-  const endIdx = current.indexOf(END_MARKER);
-  let next;
-  if (beginIdx !== -1 && endIdx !== -1 && endIdx > beginIdx) {
-    next = current.slice(0, beginIdx) + block + current.slice(endIdx + END_MARKER.length);
-  } else if (current.trim() === '') {
-    next = `${block}\n`;
-  } else {
-    next = `${current.replace(/\s*$/, '')}\n\n${block}\n`;
-  }
-
-  if (next !== current) {
-    fs.writeFileSync(target, next, 'utf8');
-  }
-  return target;
+  return writeManagedBlock(projectFolder, existingStandardsFile, BEGIN_MARKER, END_MARKER, effectiveMd);
 }

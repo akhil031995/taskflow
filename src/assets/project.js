@@ -26,8 +26,10 @@ document.querySelectorAll('.view-tab').forEach((tab) => {
         document.getElementById('view-notes').classList.toggle('hidden', view !== 'notes');
         document.getElementById('view-standards').classList.toggle('hidden', view !== 'standards');
         document.getElementById('view-dod').classList.toggle('hidden', view !== 'dod');
+        document.getElementById('view-primer').classList.toggle('hidden', view !== 'primer');
         if (view === 'standards') loadStandards();
         if (view === 'dod') loadDodGates();
+        if (view === 'primer') loadPrimer();
     });
 });
 
@@ -94,6 +96,25 @@ document.getElementById('dod-save').addEventListener('click', async () => {
         toast(err.message, 'error');
     }
 });
+
+// ===================================================================
+// Project primer (cached, auto-generated structure summary; read-only)
+// ===================================================================
+let primerLoaded = false;
+
+async function loadPrimer() {
+    if (primerLoaded) return;
+    try {
+        const { primer_md, updated_at } = await api('project.primer.get', { project_id: PROJECT_ID });
+        if (primer_md) {
+            document.getElementById('primer-content').textContent = primer_md;
+            document.getElementById('primer-updated').textContent = updated_at ? `Updated ${updated_at}` : '';
+        }
+        primerLoaded = true;
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
 
 // ===================================================================
 // Board card density (Comfortable / Compact), persisted to localStorage
