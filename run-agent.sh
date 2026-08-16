@@ -372,11 +372,20 @@ run_once() {
         fi
     fi
 
+<<<<<<< HEAD
     local task_id project_id project_folder resumed
     task_id="$(echo "$ticket_json" | jq -r '.id')"
     project_id="$(echo "$ticket_json" | jq -r '.project_id // empty')"
     project_folder="$(echo "$ticket_json" | jq -r '.project_folder // empty')"
     resumed="$(echo "$ticket_json" | jq -r 'if .resumed then "1" else "0" end')"
+=======
+    local task_id project_id project_folder priority task_type
+    task_id="$(echo "$ticket_json" | jq -r '.id')"
+    project_id="$(echo "$ticket_json" | jq -r '.project_id // empty')"
+    project_folder="$(echo "$ticket_json" | jq -r '.project_folder // empty')"
+    priority="$(echo "$ticket_json" | jq -r '.priority // empty')"
+    task_type="$(echo "$ticket_json" | jq -r '.task_type // empty')"
+>>>>>>> taskflow/ticket-29
     echo "[run-agent] claimed TF-$task_id -> project_folder: ${project_folder:-'(not set)'}" | tee -a "$run_log"
 
     if [ -z "$project_folder" ] || [ ! -d "$project_folder" ]; then
@@ -408,6 +417,22 @@ run_once() {
     # Ensure project_folder is a git repo and check out this ticket's scratch
     # checkpoint branch before Claude ever starts - see git_checkpoint_* above.
     git_checkpoint_start "$project_folder" "$task_id" "$run_log"
+
+    # Model routing (TF-29): pick a model from priority/task_type before
+    # launching Claude, so cheap/low-priority tickets don't default to the
+    # top model. See mcp-server/model-router.js for the rules and
+    # src/settings.php's "Model Routing" section for the configurable
+    # mapping. Empty/"null" result means routing is off or nothing matched -
+    # omit --model and let the Claude CLI use its own default.
+    local model_json selected_model
+    model_json="$(node "$PROJECT_DIR/mcp-server/resolve-model.js" "$priority" "$task_type" 2>>"$run_log")"
+    selected_model="$(echo "$model_json" | jq -r '.model // empty' 2>/dev/null)"
+    echo "[run-agent] model routing for TF-$task_id (priority=$priority, task_type=$task_type): ${model_json:-'(resolve-model.js produced no output)'}" | tee -a "$run_log"
+
+    local -a model_flag=()
+    if [ -n "$selected_model" ]; then
+        model_flag=(--model "$selected_model")
+    fi
 
     # Static procedure + the ticket already claimed above, so Claude uses it
     # instead of calling get_highest_priority_ticket (which would claim a
@@ -448,7 +473,7 @@ $ticket_json"
     # the rate-limit check below), then piped through format-stream.js for a
     # readable live transcript on the terminal.
     ( cd "$project_folder" && claude --dangerously-skip-permissions --verbose \
-        --output-format stream-json -p "$full_prompt" ) 2>&1 \
+        --output-format stream-json "${model_flag[@]}" -p "$full_prompt" ) 2>&1 \
         | tee -a "$run_log" \
         | node "$PROJECT_DIR/mcp-server/format-stream.js"
     local code=${PIPESTATUS[0]}   # claude's exit code (first stage), not tee's/node's

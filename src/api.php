@@ -317,7 +317,20 @@ function settings_save(): array
         'notify_email_from',
         'notify_email_to',
         'notify_app_base_url',
+        'model_routing_enabled',
+        'model_routing_default_model',
+        'model_routing_priority_1',
+        'model_routing_priority_2',
+        'model_routing_priority_3',
+        'model_routing_task_type_overrides',
     ];
+
+    if (isset($settings['model_routing_task_type_overrides']) && trim((string) $settings['model_routing_task_type_overrides']) !== '') {
+        json_decode((string) $settings['model_routing_task_type_overrides']);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            json_response(['ok' => false, 'error' => 'model_routing_task_type_overrides must be valid JSON'], 422);
+        }
+    }
 
     $saved = 0;
     foreach ($settings as $key => $value) {
