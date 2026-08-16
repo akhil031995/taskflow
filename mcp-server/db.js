@@ -178,6 +178,11 @@ async function finalizeClaim(conn, ticket, resuming) {
       (ticket.standards_file ? ` Standards file: ${ticket.standards_file}.` : ' No standards file found.')
   );
   await notifyTicketEvent(ticket.id, 'in-progress', resuming ? 'Resumed after rate-limited pause.' : null);
+  // Lets a caller that later has to give this claim back (e.g. run-agent.sh's
+  // per-project lock is already held by a concurrently-running instance for
+  // this ticket's project) know which prior state to restore - see
+  // requeueTicket below.
+  ticket.resumed = resuming;
   return ticket;
 }
 
@@ -312,6 +317,41 @@ export async function markTicketBlocked(taskId, reason, stage = 'pre-flight') {
   if (res.affectedRows === 0) throw new Error(`No ticket with id ${taskId}`);
   await sessionLog(taskId, 'status', `Blocked by harness (${stage}): ${reason}`);
   await notifyTicketEvent(taskId, 'blocked', reason);
+}
+
+/**
+ * Give back a ticket claimed by claimHighestPriorityTicket/claimTicketById
+ * without treating it as blocked, completed, or orphaned - used by
+ * run-agent.sh when a ticket was claimed but its project's per-project lock
+ * (see run-agent.sh's "Per-project locking" section) is already held by a
+ * concurrently-running instance working that same project. Restores exactly
+ * the state the ticket was claimable from, using the `resumed` flag
+ * finalizeClaim recorded at claim time: back to `rate-limited-paused` if this
+ * claim was itself a resume (status stays `in_progress`, matching how paused
+ * tickets already sit in that column), otherwise back to a fresh `pending`
+ * row. Does NOT touch `resume_attempts` - this is a host-side scheduling
+ * deferral, not a crashed/orphaned session (see reconcile.js).
+ */
+export async function requeueTicket(taskId, resumed, reason) {
+  const note = `\n[${new Date().toISOString()}] ${reason}`;
+  if (resumed) {
+    await pool.query(
+      `UPDATE tasks
+          SET ai_execution_status = 'rate-limited-paused', ai_locked_at = NULL,
+              ai_comments = CONCAT(COALESCE(ai_comments, ''), ?)
+        WHERE id = ?`,
+      [note, taskId]
+    );
+  } else {
+    await pool.query(
+      `UPDATE tasks
+          SET ai_execution_status = NULL, status = 'pending', ai_locked_at = NULL,
+              ai_comments = CONCAT(COALESCE(ai_comments, ''), ?)
+        WHERE id = ?`,
+      [note, taskId]
+    );
+  }
+  await sessionLog(taskId, 'status', `Requeued: ${reason}`);
 }
 
 /**
